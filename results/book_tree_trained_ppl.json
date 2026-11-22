@@ -1,0 +1,15 @@
+{
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "backend": "directml",
+  "dtype": "torch.float32",
+  "seq_len": 2048,
+  "ppl": {
+    "ppl": 29.26679002910293,
+    "nll": 3.37645342708149,
+    "tokens": 2047,
+    "cached_entries": 167,
+    "compression_x": 12.263473053892216,
+    "tok_per_sec": 94.28100406304715,
+    "peak_vram_mb": 0.0
+  }
+}

@@ -1,0 +1,388 @@
+{
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "backend": "directml",
+  "dtype": "torch.float32",
+  "seq_len": 2048,
+  "ablation": [
+    {
+      "name": "1. Full KV (Upper Bound)",
+      "config": {
+        "mode": "full",
+        "sink_size": 4,
+        "local_size": 128,
+        "salient_size": 64,
+        "slots_per_level": 4,
+        "max_levels": 20,
+        "rope_mode": "pre_rope_damped_gauss",
+        "merger_mode": "mean",
+        "use_log_bias": true,
+        "salience_metric": "hybrid",
+        "outlier_weight": 0.25
+      },
+      "ppl": 23.745568188653216,
+      "nll": 3.1673959104851996,
+      "tokens": 2047,
+      "cached_entries": 2048,
+      "compression_x": 1.0,
+      "tok_per_sec": 531.5789566579346,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 100.0,
+      "per_depth": {
+        "10%": true,
+        "30%": true,
+        "50%": true,
+        "70%": true,
+        "90%": true
+      },
+      "multikey_acc": 100.0,
+      "details": {
+        "ALPHA-ORBIT": true,
+        "BETA-QUARTZ": true,
+        "GAMMA-PULSE": true,
+        "DELTA-PRISM": true
+      }
+    },
+    {
+      "name": "2. StreamingLLM (Eviction)",
+      "config": {
+        "mode": "streaming_llm",
+        "sink_size": 4,
+        "local_size": 128,
+        "salient_size": 64,
+        "slots_per_level": 4,
+        "max_levels": 20,
+        "rope_mode": "pre_rope_damped_gauss",
+        "merger_mode": "mean",
+        "use_log_bias": true,
+        "salience_metric": "hybrid",
+        "outlier_weight": 0.25
+      },
+      "ppl": 29.7433264561939,
+      "nll": 3.3926047860277597,
+      "tokens": 2047,
+      "cached_entries": 132,
+      "compression_x": 15.515151515151516,
+      "tok_per_sec": 528.8250174308504,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 0.0,
+      "per_depth": {
+        "10%": false,
+        "30%": false,
+        "50%": false,
+        "70%": false,
+        "90%": false
+      },
+      "multikey_acc": 0.0,
+      "details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": false,
+        "DELTA-PRISM": false
+      }
+    },
+    {
+      "name": "3. H2O-Lite (Salient Only)",
+      "config": {
+        "mode": "h2o_lite",
+        "sink_size": 4,
+        "local_size": 128,
+        "salient_size": 64,
+        "slots_per_level": 4,
+        "max_levels": 20,
+        "rope_mode": "pre_rope_damped_gauss",
+        "merger_mode": "mean",
+        "use_log_bias": true,
+        "salience_metric": "hybrid",
+        "outlier_weight": 0.25
+      },
+      "ppl": 25.69469557869921,
+      "nll": 3.2462845728822503,
+      "tokens": 2047,
+      "cached_entries": 196,
+      "compression_x": 10.448979591836734,
+      "tok_per_sec": 378.10110057882224,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 0.0,
+      "per_depth": {
+        "10%": false,
+        "30%": false,
+        "50%": false,
+        "70%": false,
+        "90%": false
+      },
+      "multikey_acc": 0.0,
+      "details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": false,
+        "DELTA-PRISM": false
+      }
+    },
+    {
+      "name": "4. Orig Carry-Bit (k=1, BaryRoPE, Stiefel)",
+      "config": {
+        "mode": "carry_bit_original",
+        "sink_size": 4,
+        "local_size": 128,
+        "salient_size": 64,
+        "slots_per_level": 4,
+        "max_levels": 20,
+        "rope_mode": "pre_rope_barycentric",
+        "merger_mode": "stiefel_unscaled",
+        "use_log_bias": true,
+        "salience_metric": "hybrid",
+        "outlier_weight": 0.25
+      },
+      "ppl": 620696.5743207397,
+      "nll": 13.338597633328579,
+      "tokens": 2047,
+      "cached_entries": 140,
+      "compression_x": 14.628571428571428,
+      "tok_per_sec": 269.38101359735924,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 0.0,
+      "per_depth": {
+        "10%": false,
+        "30%": false,
+        "50%": false,
+        "70%": false,
+        "90%": false
+      },
+      "multikey_acc": 0.0,
+      "details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": false,
+        "DELTA-PRISM": false
+      }
+    },
+    {
+      "name": "5. Orig Carry-Bit (k=1, BaryRoPE, Mean)",
+      "config": {
+        "mode": "carry_bit_original",
+        "sink_size": 4,
+        "local_size": 128,
+        "salient_size": 64,
+        "slots_per_level": 4,
+        "max_levels": 20,
+        "rope_mode": "pre_rope_barycentric",
+        "merger_mode": "mean",
+        "use_log_bias": true,
+        "salience_metric": "hybrid",
+        "outlier_weight": 0.25
+      },
+      "ppl": 29.94140188136495,
+      "nll": 3.3992422009202,
+      "tokens": 2047,
+      "cached_entries": 140,
+      "compression_x": 14.628571428571428,
+      "tok_per_sec": 266.5281553159496,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 0.0,
+      "per_depth": {
+        "10%": false,
+        "30%": false,
+        "50%": false,
+        "70%": false,
+        "90%": false
+      },
+      "multikey_acc": 0.0,
+      "details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": false,
+        "DELTA-PRISM": false
+      }
+    },
+    {
+      "name": "6. MS-Tree (k-slot, GaussDampedRoPE, Mean)",
+      "config": {
+        "mode": "multiscale_tree",
+        "sink_size": 4,
+        "local_size": 128,
+        "salient_size": 64,
+        "slots_per_level": 4,
+        "max_levels": 20,
+        "rope_mode": "pre_rope_damped_gauss",
+        "merger_mode": "mean",
+        "use_log_bias": true,
+        "salience_metric": "hybrid",
+        "outlier_weight": 0.25
+      },
+      "ppl": 29.271143745384297,
+      "nll": 3.3766021756282414,
+      "tokens": 2047,
+      "cached_entries": 167,
+      "compression_x": 12.263473053892216,
+      "tok_per_sec": 212.40043962742806,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 0.0,
+      "per_depth": {
+        "10%": false,
+        "30%": false,
+        "50%": false,
+        "70%": false,
+        "90%": false
+      },
+      "multikey_acc": 0.0,
+      "details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": false,
+        "DELTA-PRISM": false
+      }
+    },
+    {
+      "name": "7. MS-Tree (k-slot, PostRoPE, Mean)",
+      "config": {
+        "mode": "multiscale_tree",
+        "sink_size": 4,
+        "local_size": 128,
+        "salient_size": 64,
+        "slots_per_level": 4,
+        "max_levels": 20,
+        "rope_mode": "post_rope",
+        "merger_mode": "mean",
+        "use_log_bias": true,
+        "salience_metric": "hybrid",
+        "outlier_weight": 0.25
+      },
+      "ppl": 29.271831650288124,
+      "nll": 3.376625676480366,
+      "tokens": 2047,
+      "cached_entries": 167,
+      "compression_x": 12.263473053892216,
+      "tok_per_sec": 236.94197229781247,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 0.0,
+      "per_depth": {
+        "10%": false,
+        "30%": false,
+        "50%": false,
+        "70%": false,
+        "90%": false
+      },
+      "multikey_acc": 0.0,
+      "details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": false,
+        "DELTA-PRISM": false
+      }
+    },
+    {
+      "name": "8. MS-Tree (k-slot, GaussDamped, No LogBias)",
+      "config": {
+        "mode": "multiscale_tree",
+        "sink_size": 4,
+        "local_size": 128,
+        "salient_size": 64,
+        "slots_per_level": 4,
+        "max_levels": 20,
+        "rope_mode": "pre_rope_damped_gauss",
+        "merger_mode": "mean",
+        "use_log_bias": false,
+        "salience_metric": "hybrid",
+        "outlier_weight": 0.25
+      },
+      "ppl": 29.189303538050673,
+      "nll": 3.373802324973659,
+      "tokens": 2047,
+      "cached_entries": 167,
+      "compression_x": 12.263473053892216,
+      "tok_per_sec": 223.39481228378105,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 0.0,
+      "per_depth": {
+        "10%": false,
+        "30%": false,
+        "50%": false,
+        "70%": false,
+        "90%": false
+      },
+      "multikey_acc": 0.0,
+      "details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": false,
+        "DELTA-PRISM": false
+      }
+    },
+    {
+      "name": "9. MS-Tree (k-slot, Salience-Weighted Merge)",
+      "config": {
+        "mode": "multiscale_tree",
+        "sink_size": 4,
+        "local_size": 128,
+        "salient_size": 64,
+        "slots_per_level": 4,
+        "max_levels": 20,
+        "rope_mode": "pre_rope_damped_gauss",
+        "merger_mode": "salience_weighted",
+        "use_log_bias": true,
+        "salience_metric": "hybrid",
+        "outlier_weight": 0.25
+      },
+      "ppl": 29.039992702342055,
+      "nll": 3.3686739386598026,
+      "tokens": 2047,
+      "cached_entries": 167,
+      "compression_x": 12.263473053892216,
+      "tok_per_sec": 152.572685388924,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 0.0,
+      "per_depth": {
+        "10%": false,
+        "30%": false,
+        "50%": false,
+        "70%": false,
+        "90%": false
+      },
+      "multikey_acc": 0.0,
+      "details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": false,
+        "DELTA-PRISM": false
+      }
+    },
+    {
+      "name": "10. Hybrid MS-KV (Salient + k-slot Tree + GaussDamped)",
+      "config": {
+        "mode": "hybrid_ms",
+        "sink_size": 4,
+        "local_size": 128,
+        "salient_size": 64,
+        "slots_per_level": 4,
+        "max_levels": 20,
+        "rope_mode": "pre_rope_damped_gauss",
+        "merger_mode": "salience_weighted",
+        "use_log_bias": true,
+        "salience_metric": "hybrid",
+        "outlier_weight": 0.25
+      },
+      "ppl": 25.854803822553308,
+      "nll": 3.2524964182175156,
+      "tokens": 2047,
+      "cached_entries": 226,
+      "compression_x": 9.061946902654867,
+      "tok_per_sec": 112.65517273663085,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 0.0,
+      "per_depth": {
+        "10%": false,
+        "30%": false,
+        "50%": false,
+        "70%": false,
+        "90%": false
+      },
+      "multikey_acc": 0.0,
+      "details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": false,
+        "DELTA-PRISM": false
+      }
+    }
+  ]
+}

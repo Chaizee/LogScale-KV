@@ -1,0 +1,16 @@
+{
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "backend": "directml",
+  "dtype": "torch.float32",
+  "seq_len": 2048,
+  "niah": {
+    "niah_acc": 0.0,
+    "per_depth": {
+      "10%": false,
+      "30%": false,
+      "50%": false,
+      "70%": false,
+      "90%": false
+    }
+  }
+}

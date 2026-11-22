@@ -89,7 +89,7 @@ def safe_cayley_orthogonal(skew_param: torch.Tensor) -> torch.Tensor:
     p = skew_param.float()
     a = 0.5 * (p - p.transpose(-1, -2))
     d = a.shape[-1]
-    eye = torch.eye(d, device=a.device, dtype=torch.float32).expand_as(a)
+    eye = torch.eye(d, dtype=torch.float32, device="cpu").to(a.device).expand_as(a)
 
     # Since (I + A) and (I - A) commute, (I + A)^{-1}(I - A) == (I - A)(I + A)^{-1}.
     try:

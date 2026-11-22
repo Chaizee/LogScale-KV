@@ -1,6 +1,12 @@
 from .cache import CacheConfig, MultiScaleKVCache, MultiScaleLayerCache
 from .device import get_best_device, get_best_dtype, safe_cayley_orthogonal
 from .mergers import build_merger, GatedCayleyMerger, ModelMergers
+from .paged_tree import (
+    PagedTreeConfig,
+    PagedTreeKVCache,
+    PagedTreeLayerCache,
+    patched_paged_tree_attention,
+)
 from .patching import patched_multiscale_attention
 
 __all__ = [
@@ -14,4 +20,8 @@ __all__ = [
     "GatedCayleyMerger",
     "ModelMergers",
     "patched_multiscale_attention",
+    "PagedTreeConfig",
+    "PagedTreeKVCache",
+    "PagedTreeLayerCache",
+    "patched_paged_tree_attention",
 ]

@@ -232,15 +232,34 @@ def build_paged_suite(args) -> List[Tuple[str, PagedTreeConfig]]:
         offload_to_cpu=not args.no_offload,
     )
     k = args.top_k_pages
+    h = args.halo_tokens
+    pin = args.pinned_size
+
+    if args.suite == "v2":
+        return [
+            ("1. Full KV (Upper Bound)", PagedTreeConfig(router="full", top_k_pages=k, **base)),
+            ("2. StreamingLLM (Eviction)", PagedTreeConfig(router="streaming_llm", top_k_pages=k, **base)),
+            (f"3. Flat Quest (AABB, 100% scan, K={k})", PagedTreeConfig(router="flat_quest", top_k_pages=k, **base)),
+            (f"4. Chrono-BVH Tree (AABB, beam, K={k})", PagedTreeConfig(router="chrono_bvh", top_k_pages=k, **base)),
+            (f"5. Chrono-UCB Tree (Mean+Var, beam, K={k})", PagedTreeConfig(router="chrono_ucb", top_k_pages=k, **base)),
+            (f"6. KV R-Tree Beam (Semantic AABB, K={k})", PagedTreeConfig(router="rtree_beam", top_k_pages=k, **base)),
+            (f"7. KV R-Tree Exact BnB (Lossless, K={k})", PagedTreeConfig(router="rtree_bnb", top_k_pages=k, **base)),
+            (f"8. KV R-Tree Beam (Semantic AABB, K={k * 2})", PagedTreeConfig(router="rtree_beam", top_k_pages=k * 2, **base)),
+        ]
+
+    # Default v3 suite: tests Induction Halo + Chrono-Hybrid + Pinned Heavy Hitters vs Flat Quest & baselines.
+    base_wide = {**base, "beam_width": max(args.beam_width, 6)}
     return [
         ("1. Full KV (Upper Bound)", PagedTreeConfig(router="full", top_k_pages=k, **base)),
         ("2. StreamingLLM (Eviction)", PagedTreeConfig(router="streaming_llm", top_k_pages=k, **base)),
-        (f"3. Flat Quest (AABB, 100% scan, K={k})", PagedTreeConfig(router="flat_quest", top_k_pages=k, **base)),
-        (f"4. Chrono-BVH Tree (AABB, beam, K={k})", PagedTreeConfig(router="chrono_bvh", top_k_pages=k, **base)),
-        (f"5. Chrono-UCB Tree (Mean+Var, beam, K={k})", PagedTreeConfig(router="chrono_ucb", top_k_pages=k, **base)),
-        (f"6. KV R-Tree Beam (Semantic AABB, K={k})", PagedTreeConfig(router="rtree_beam", top_k_pages=k, **base)),
-        (f"7. KV R-Tree Exact BnB (Lossless, K={k})", PagedTreeConfig(router="rtree_bnb", top_k_pages=k, **base)),
-        (f"8. KV R-Tree Beam (Semantic AABB, K={k * 2})", PagedTreeConfig(router="rtree_beam", top_k_pages=k * 2, **base)),
+        (f"3. Flat Quest (K={k}, no halo)", PagedTreeConfig(router="flat_quest", top_k_pages=k, halo_tokens=0, pinned_size=0, **base)),
+        (f"4. Flat Quest + Halo={h} (K={k})", PagedTreeConfig(router="flat_quest", top_k_pages=k, halo_tokens=h, pinned_size=0, **base)),
+        (f"5. Chrono-BVH (K={k}, no halo)", PagedTreeConfig(router="chrono_bvh", top_k_pages=k, halo_tokens=0, pinned_size=0, **base)),
+        (f"6. Chrono-BVH + Halo={h} (K={k})", PagedTreeConfig(router="chrono_bvh", top_k_pages=k, halo_tokens=h, pinned_size=0, **base)),
+        (f"7. Chrono-Hybrid + Halo={h} (K={k})", PagedTreeConfig(router="chrono_hybrid", top_k_pages=k, halo_tokens=h, pinned_size=0, **base)),
+        (f"8. Chrono-BVH + Halo={h} + Pin={pin} (K={k})", PagedTreeConfig(router="chrono_bvh", top_k_pages=k, halo_tokens=h, pinned_size=pin, **base)),
+        (f"9. Chrono-Hybrid + Halo={h} + Pin={pin} (K={k})", PagedTreeConfig(router="chrono_hybrid", top_k_pages=k, halo_tokens=h, pinned_size=pin, **base)),
+        (f"10. Chrono-BVH + Halo={h} + Pin={pin} (K={k + 2}, beam=6)", PagedTreeConfig(router="chrono_bvh", top_k_pages=k + 2, halo_tokens=h, pinned_size=pin, **base_wide)),
     ]
 
 
@@ -272,7 +291,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--sink-size", type=int, default=4)
     p.add_argument("--local-size", type=int, default=128)
     p.add_argument("--page-size", type=int, default=16)
-    p.add_argument("--top-k-pages", type=int, default=4, help="Default K=4 pages * 16 = 64 tokens (~196 active slots)")
+    p.add_argument("--suite", type=str, default="v3", choices=["v3", "v2"], help="Benchmark suite (v3=Halo+Pin, v2=R-Tree comparison)")
+    p.add_argument("--top-k-pages", type=int, default=4, help="Default K=4 pages * 16 = 64 tokens")
+    p.add_argument("--halo-tokens", type=int, default=8, help="Induction Halo tokens appended from next page (0..page_size)")
+    p.add_argument("--pinned-size", type=int, default=32, help="Static GPU-pinned Heavy-Hitter anchor budget")
     p.add_argument("--beam-width", type=int, default=4)
     p.add_argument("--branching", type=int, default=4)
     p.add_argument("--rtree-fanout", type=int, default=8)

@@ -31,15 +31,17 @@ from .rope import apply_rope_1d, extract_rope_params
 
 @dataclass
 class PagedTreeConfig:
-    router: str = "rtree_beam"  # full | streaming_llm | flat_quest | chrono_bvh | chrono_ucb | rtree_beam | rtree_bnb
+    router: str = "chrono_bvh"  # full | streaming_llm | flat_quest | chrono_bvh | chrono_ucb | chrono_hybrid | rtree_beam | rtree_bnb
     sink_size: int = 4
     local_size: int = 128
     page_size: int = 16
-    top_k_pages: int = 4  # fetched exact pages per KV-head (e.g., 4*16=64 -> total ~196 slots = H2O-Lite!)
+    top_k_pages: int = 4  # fetched exact pages per KV-head (e.g., 4*16=64 tokens)
+    halo_tokens: int = 0  # Induction Halo: extra contiguous tokens read from page p+1 (0..page_size)
+    pinned_size: int = 0  # GPU-resident static Heavy-Hitter anchors (deduplicated against fetched pages)
     beam_width: int = 4  # top-down beam width for tree beam search
     branching: int = 4  # branching factor for chrono trees
     rtree_max_fanout: int = 8  # max children per Streaming KV R-Tree node
-    ucb_beta: float = 1.0  # exploration factor for chrono_ucb EVT bound
+    ucb_beta: float = 1.0  # exploration factor for chrono_ucb / chrono_hybrid EVT bound
     offload_to_cpu: bool = True  # keep exact KV page pool in host RAM (ideal for 8GB VRAM + 16GB RAM)
 
 
@@ -158,7 +160,8 @@ class _HeadChronoTree:
             lvl = next_lvl
 
     def _score_nodes(self, q_flat: torch.Tensor, lvl: int, indices: List[int]) -> torch.Tensor:
-        if self.scoring == "aabb":
+        use_aabb = (self.scoring == "aabb") or (self.scoring == "hybrid" and lvl == 0)
+        if use_aabb:
             b_min = torch.stack([self.mins[lvl][i] for i in indices], dim=0)
             b_max = torch.stack([self.maxs[lvl][i] for i in indices], dim=0)
             return _aabb_ub_scores(q_flat, b_min, b_max)
@@ -474,20 +477,33 @@ class PagedTreeLayerCache:
         self.total_queries: int = 0
         self.total_nodes_scored: int = 0
         self.total_pages_available_sum: int = 0
-        self.last_active_slots: int = 0
+        self.last_valid_fetched_avg: float = 0.0
 
         # Always GPU-resident exact regions:
         self.sink_k: Optional[torch.Tensor] = None
         self.sink_v: Optional[torch.Tensor] = None
+
+        # Optional GPU-resident Pinned Heavy Hitters (deduplicated against fetched pages):
+        self.pinned_k: Optional[torch.Tensor] = None
+        self.pinned_v: Optional[torch.Tensor] = None
+        self.pinned_pos: Optional[torch.Tensor] = None  # (S_pin,) int64 on CPU
+        self.pinned_score: Optional[torch.Tensor] = None  # (S_pin,) float32 on device
+
         self.stage_k: Optional[torch.Tensor] = None  # < page_size tokens awaiting seal
         self.stage_v: Optional[torch.Tensor] = None
+        self.stage_pos: Optional[torch.Tensor] = None  # (<P,) int64 on CPU
+        self.stage_score: Optional[torch.Tensor] = None  # (<P,) float32 on device
+
         self.loc_k: Optional[torch.Tensor] = None
         self.loc_v: Optional[torch.Tensor] = None
+        self.loc_pos: Optional[torch.Tensor] = None  # (S_loc,) int64 on CPU
+        self.loc_score: Optional[torch.Tensor] = None  # (S_loc,) float32 on device
 
         # Exact KV Page Pool (stored on CPU RAM when offload_to_cpu=True):
-        # Each entry has shape (H_kv, P, D)
+        # Each entry has shape (H_kv, P, D); pages_pos holds exact (P,) int64 token positions on CPU.
         self.pages_k: List[torch.Tensor] = []
         self.pages_v: List[torch.Tensor] = []
+        self.pages_pos: List[torch.Tensor] = []
 
         # Flat AABB descriptors per KV-head on CPU float32: list of (H_kv, D)
         self.flat_mins: List[torch.Tensor] = []
@@ -496,10 +512,18 @@ class PagedTreeLayerCache:
         # Per-KV-head tree indexes:
         self.chrono_trees: Optional[List[_HeadChronoTree]] = None
         self.rtrees: Optional[List[_HeadRTree]] = None
-        if self.cfg.router in ("chrono_bvh", "chrono_ucb"):
-            scoring = "aabb" if self.cfg.router == "chrono_bvh" else "ucb"
+        if self.cfg.router in ("chrono_bvh", "chrono_ucb", "chrono_hybrid"):
+            scoring_map = {
+                "chrono_bvh": "aabb",
+                "chrono_ucb": "ucb",
+                "chrono_hybrid": "hybrid",
+            }
             self.chrono_trees = [
-                _HeadChronoTree(branching=self.cfg.branching, scoring=scoring, ucb_beta=self.cfg.ucb_beta)
+                _HeadChronoTree(
+                    branching=self.cfg.branching,
+                    scoring=scoring_map[self.cfg.router],
+                    ucb_beta=self.cfg.ucb_beta,
+                )
                 for _ in range(self.num_kv_heads)
             ]
         elif self.cfg.router in ("rtree_beam", "rtree_bnb"):
@@ -508,16 +532,73 @@ class PagedTreeLayerCache:
                 for _ in range(self.num_kv_heads)
             ]
 
-    def _seal_pages(self, k_ev: torch.Tensor, v_ev: torch.Tensor) -> None:
-        """Buffer evicted tokens and seal complete exact pages of length page_size."""
+    def _update_pinned_pool(
+        self,
+        k_ev: torch.Tensor,
+        v_ev: torch.Tensor,
+        pos_ev: torch.Tensor,
+        score_ev: torch.Tensor,
+    ) -> None:
+        """Retain top-pinned_size high-attention tokens on GPU in chronological order."""
+        cap = self.cfg.pinned_size
+        if cap <= 0:
+            return
+
+        if self.pinned_k is None:
+            comb_k, comb_v, comb_pos, comb_score = k_ev, v_ev, pos_ev, score_ev
+        else:
+            comb_k = torch.cat((self.pinned_k, k_ev), dim=2)
+            comb_v = torch.cat((self.pinned_v, v_ev), dim=2)
+            comb_pos = torch.cat((self.pinned_pos, pos_ev), dim=0)
+            comb_score = torch.cat((self.pinned_score, score_ev), dim=0)
+
+        total = comb_k.shape[2]
+        if total <= cap:
+            self.pinned_k, self.pinned_v, self.pinned_pos, self.pinned_score = (
+                comb_k,
+                comb_v,
+                comb_pos,
+                comb_score,
+            )
+            return
+
+        _, top_idx = torch.topk(comb_score, k=cap, largest=True, sorted=False)
+        sel_idx = torch.sort(top_idx).values
+        sel_idx_cpu = sel_idx.detach().cpu()
+
+        self.pinned_k = comb_k[:, :, sel_idx, :]
+        self.pinned_v = comb_v[:, :, sel_idx, :]
+        self.pinned_pos = comb_pos[sel_idx_cpu]
+        self.pinned_score = comb_score[sel_idx]
+
+    def _seal_pages(
+        self,
+        k_ev: torch.Tensor,
+        v_ev: torch.Tensor,
+        pos_ev: torch.Tensor,
+        score_ev: torch.Tensor,
+    ) -> None:
+        """Buffer evicted tokens and seal complete exact pages of length page_size.
+
+        Pinned Heavy Hitters are updated strictly from sealed tokens so pinned_pool
+        never overlaps with unsealed stage_k tokens (only with sealed pages, which
+        are explicitly deduplicated in gather_past_kv).
+        """
         if self.cfg.router == "streaming_llm":
             return
 
         if self.stage_k is None:
-            self.stage_k, self.stage_v = k_ev, v_ev
+            self.stage_k, self.stage_v, self.stage_pos, self.stage_score = (
+                k_ev,
+                v_ev,
+                pos_ev,
+                score_ev,
+            )
         else:
             self.stage_k = torch.cat((self.stage_k, k_ev), dim=2)
             self.stage_v = torch.cat((self.stage_v, v_ev), dim=2)
+            self.stage_pos = torch.cat((self.stage_pos, pos_ev), dim=0)
+            self.stage_score = torch.cat((self.stage_score, score_ev), dim=0)
 
         p_sz = self.cfg.page_size
         n_stage = self.stage_k.shape[2]
@@ -528,18 +609,28 @@ class PagedTreeLayerCache:
         seal_len = n_new_pages * p_sz
         k_seal = self.stage_k[:, :, :seal_len, :]
         v_seal = self.stage_v[:, :, :seal_len, :]
+        pos_seal = self.stage_pos[:seal_len]
+        score_seal = self.stage_score[:seal_len]
 
         if seal_len < n_stage:
             self.stage_k = self.stage_k[:, :, seal_len:, :]
             self.stage_v = self.stage_v[:, :, seal_len:, :]
+            self.stage_pos = self.stage_pos[seal_len:]
+            self.stage_score = self.stage_score[seal_len:]
         else:
             self.stage_k = None
             self.stage_v = None
+            self.stage_pos = None
+            self.stage_score = None
+
+        if self.cfg.pinned_size > 0:
+            self._update_pinned_pool(k_seal, v_seal, pos_seal, score_seal)
 
         # Compute page descriptors on CPU float32 and store exact pages in host RAM (if offloading).
         for p in range(n_new_pages):
             kp = k_seal[0, :, p * p_sz : (p + 1) * p_sz, :]  # (H_kv, P, D)
             vp = v_seal[0, :, p * p_sz : (p + 1) * p_sz, :]  # (H_kv, P, D)
+            pp = pos_seal[p * p_sz : (p + 1) * p_sz]  # (P,) int64 on CPU
 
             kp_f_cpu = kp.detach().to(device="cpu", dtype=torch.float32)
             p_min = kp_f_cpu.amin(dim=1)  # (H_kv, D)
@@ -554,6 +645,7 @@ class PagedTreeLayerCache:
             else:
                 self.pages_k.append(kp.detach())
                 self.pages_v.append(vp.detach())
+            self.pages_pos.append(pp)
 
             self.flat_mins.append(p_min)
             self.flat_maxs.append(p_max)
@@ -623,49 +715,186 @@ class PagedTreeLayerCache:
 
     def gather_past_kv(
         self, q_rot: torch.Tensor, device: torch.device, dtype: torch.dtype
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
-        """Assemble active exact KV context on GPU: [Sinks | Fetched Pages | Staging | Local]."""
+    ) -> Tuple[
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Dict[str, Tuple[int, int]],
+    ]:
+        """Assemble active exact KV context on GPU: [Sinks | Pinned | Fetched+Halo | Staging | Local].
+
+        Applies exact deduplication between Pinned Heavy Hitters, selected pages, and Induction Halos.
+        When per-KV-head deduplicated lengths differ, right-pads shorter heads and returns a boolean
+        ``past_valid_mask`` of shape (1, H_kv, m_past) so padding never affects Softmax.
+        """
         ks: List[torch.Tensor] = []
         vs: List[torch.Tensor] = []
+        masks: List[torch.Tensor] = []
+        slices: Dict[str, Tuple[int, int]] = {}
+        offset = 0
+        needs_mask = False
 
         if self.sink_k is not None:
+            n = self.sink_k.shape[2]
             ks.append(self.sink_k)
             vs.append(self.sink_v)
+            masks.append(torch.ones((1, self.num_kv_heads, n), device=device, dtype=torch.bool))
+            slices["sink"] = (offset, offset + n)
+            offset += n
+
+        pinned_set = set(self.pinned_pos.tolist()) if self.pinned_pos is not None else set()
+        if self.pinned_k is not None:
+            n = self.pinned_k.shape[2]
+            ks.append(self.pinned_k)
+            vs.append(self.pinned_v)
+            masks.append(torch.ones((1, self.num_kv_heads, n), device=device, dtype=torch.bool))
+            slices["pinned"] = (offset, offset + n)
+            offset += n
 
         selected = self._select_pages_per_head(q_rot)
         if selected is not None:
-            # Gather exact pages independently per KV-head and transfer to GPU in one tensor.
-            head_ks = []
-            head_vs = []
+            halo = max(0, min(int(self.cfg.halo_tokens), self.cfg.page_size))
+            n_pages_total = len(self.pages_k)
+            head_dim = self.pages_k[0].shape[-1]
+            src_device = self.pages_k[0].device
+            src_dtype = self.pages_k[0].dtype
+
+            head_ks: List[torch.Tensor] = []
+            head_vs: List[torch.Tensor] = []
+            head_lens: List[int] = []
+
             for h, page_ids in enumerate(selected):
-                hk = torch.cat([self.pages_k[pid][h] for pid in page_ids], dim=0)  # (K*P, D)
-                hv = torch.cat([self.pages_v[pid][h] for pid in page_ids], dim=0)  # (K*P, D)
-                head_ks.append(hk)
-                head_vs.append(hv)
-            fetched_k = torch.stack(head_ks, dim=0).unsqueeze(0).to(device=device, dtype=dtype)
-            fetched_v = torch.stack(head_vs, dim=0).unsqueeze(0).to(device=device, dtype=dtype)
-            ks.append(fetched_k)
-            vs.append(fetched_v)
+                selected_set = set(page_ids)
+                tok_ks: List[torch.Tensor] = []
+                tok_vs: List[torch.Tensor] = []
+
+                for pid in page_ids:
+                    pk = self.pages_k[pid][h]
+                    pv = self.pages_v[pid][h]
+                    if pinned_set:
+                        ppos = self.pages_pos[pid].tolist()
+                        keep = [i for i, pos_val in enumerate(ppos) if pos_val not in pinned_set]
+                        if keep:
+                            idx_t = torch.tensor(keep, dtype=torch.long, device=pk.device)
+                            tok_ks.append(pk.index_select(0, idx_t))
+                            tok_vs.append(pv.index_select(0, idx_t))
+                    else:
+                        tok_ks.append(pk)
+                        tok_vs.append(pv)
+
+                    # Induction Halo: append first `halo` tokens of page pid+1 if contiguous and not selected.
+                    if halo > 0 and (pid + 1) < n_pages_total and (pid + 1) not in selected_set:
+                        hk_next = self.pages_k[pid + 1][h][:halo]
+                        hv_next = self.pages_v[pid + 1][h][:halo]
+                        if pinned_set:
+                            hpos = self.pages_pos[pid + 1][:halo].tolist()
+                            keep_h = [i for i, pos_val in enumerate(hpos) if pos_val not in pinned_set]
+                            if keep_h:
+                                idx_t = torch.tensor(keep_h, dtype=torch.long, device=hk_next.device)
+                                tok_ks.append(hk_next.index_select(0, idx_t))
+                                tok_vs.append(hv_next.index_select(0, idx_t))
+                        else:
+                            tok_ks.append(hk_next)
+                            tok_vs.append(hv_next)
+
+                if tok_ks:
+                    cat_k = torch.cat(tok_ks, dim=0)
+                    cat_v = torch.cat(tok_vs, dim=0)
+                else:
+                    cat_k = torch.empty((0, head_dim), device=src_device, dtype=src_dtype)
+                    cat_v = torch.empty((0, head_dim), device=src_device, dtype=src_dtype)
+
+                head_ks.append(cat_k)
+                head_vs.append(cat_v)
+                head_lens.append(int(cat_k.shape[0]))
+
+            max_len = max(head_lens)
+            self.last_valid_fetched_avg = sum(head_lens) / max(1, len(head_lens))
+
+            if max_len > 0:
+                if all(ln == max_len for ln in head_lens):
+                    fetched_k = torch.stack(head_ks, dim=0).unsqueeze(0).to(device=device, dtype=dtype)
+                    fetched_v = torch.stack(head_vs, dim=0).unsqueeze(0).to(device=device, dtype=dtype)
+                    fetched_mask = torch.ones((1, self.num_kv_heads, max_len), device=device, dtype=torch.bool)
+                else:
+                    needs_mask = True
+                    pad_k = torch.zeros((1, self.num_kv_heads, max_len, head_dim), device=src_device, dtype=src_dtype)
+                    pad_v = torch.zeros((1, self.num_kv_heads, max_len, head_dim), device=src_device, dtype=src_dtype)
+                    fetched_mask = torch.zeros((1, self.num_kv_heads, max_len), device="cpu", dtype=torch.bool)
+                    for h, ln in enumerate(head_lens):
+                        if ln > 0:
+                            pad_k[0, h, :ln, :] = head_ks[h]
+                            pad_v[0, h, :ln, :] = head_vs[h]
+                            fetched_mask[0, h, :ln] = True
+                    fetched_k = pad_k.to(device=device, dtype=dtype)
+                    fetched_v = pad_v.to(device=device, dtype=dtype)
+                    fetched_mask = fetched_mask.to(device=device)
+
+                ks.append(fetched_k)
+                vs.append(fetched_v)
+                masks.append(fetched_mask)
+                slices["fetched"] = (offset, offset + max_len)
+                offset += max_len
+        else:
+            self.last_valid_fetched_avg = 0.0
 
         if self.stage_k is not None:
+            n = self.stage_k.shape[2]
             ks.append(self.stage_k)
             vs.append(self.stage_v)
+            masks.append(torch.ones((1, self.num_kv_heads, n), device=device, dtype=torch.bool))
+            slices["stage"] = (offset, offset + n)
+            offset += n
 
         if self.loc_k is not None:
+            n = self.loc_k.shape[2]
             ks.append(self.loc_k)
             vs.append(self.loc_v)
+            masks.append(torch.ones((1, self.num_kv_heads, n), device=device, dtype=torch.bool))
+            slices["local"] = (offset, offset + n)
+            offset += n
 
         if not ks:
-            self.last_active_slots = 0
-            return None, None
+            return None, None, None, slices
 
         k_past = torch.cat(ks, dim=2)
         v_past = torch.cat(vs, dim=2)
-        self.last_active_slots = int(k_past.shape[2])
-        return k_past, v_past
+        past_valid_mask = torch.cat(masks, dim=2) if needs_mask else None
+        return k_past, v_past, past_valid_mask, slices
 
-    def append_chunk(self, k_rot: torch.Tensor, v: torch.Tensor) -> None:
-        self.total_tokens_seen += int(k_rot.shape[2])
+    def apply_salience_feedback(
+        self,
+        salience_past: Optional[torch.Tensor],
+        slices: Dict[str, Tuple[int, int]],
+    ) -> None:
+        if salience_past is None or self.cfg.pinned_size <= 0:
+            return
+        with torch.no_grad():
+            if "pinned" in slices and self.pinned_score is not None:
+                s0, s1 = slices["pinned"]
+                self.pinned_score = self.pinned_score + salience_past[s0:s1]
+            if "stage" in slices and self.stage_score is not None:
+                s0, s1 = slices["stage"]
+                self.stage_score = self.stage_score + salience_past[s0:s1]
+            if "local" in slices and self.loc_score is not None:
+                s0, s1 = slices["local"]
+                self.loc_score = self.loc_score + salience_past[s0:s1]
+
+    def append_chunk(
+        self,
+        k_rot: torch.Tensor,
+        v: torch.Tensor,
+        pos_chunk: Optional[torch.Tensor] = None,
+        attn_salience_chunk: Optional[torch.Tensor] = None,
+    ) -> None:
+        t = int(k_rot.shape[2])
+        start_seen = self.total_tokens_seen
+        self.total_tokens_seen += t
+
+        if pos_chunk is not None:
+            pos_cpu = pos_chunk.detach().to(device="cpu", dtype=torch.long)
+        else:
+            pos_cpu = torch.arange(start_seen, start_seen + t, dtype=torch.long)
 
         if self.cfg.router == "full":
             if self.loc_k is None:
@@ -675,7 +904,13 @@ class PagedTreeLayerCache:
                 self.loc_v = torch.cat((self.loc_v, v.detach()), dim=2)
             return
 
-        cur_k, cur_v = k_rot.detach(), v.detach()
+        score_cur = (
+            attn_salience_chunk.detach().float()
+            if attn_salience_chunk is not None
+            else torch.zeros(t, device=k_rot.device, dtype=torch.float32)
+        )
+
+        cur_k, cur_v, cur_pos, cur_score = k_rot.detach(), v.detach(), pos_cpu, score_cur
         sink_cur = 0 if self.sink_k is None else self.sink_k.shape[2]
         if sink_cur < self.cfg.sink_size:
             need = min(self.cfg.sink_size - sink_cur, cur_k.shape[2])
@@ -689,28 +924,45 @@ class PagedTreeLayerCache:
                 return
             cur_k = cur_k[:, :, need:, :]
             cur_v = cur_v[:, :, need:, :]
+            cur_pos = cur_pos[need:]
+            cur_score = cur_score[need:]
 
         if self.loc_k is None:
-            self.loc_k, self.loc_v = cur_k, cur_v
+            self.loc_k, self.loc_v, self.loc_pos, self.loc_score = cur_k, cur_v, cur_pos, cur_score
         else:
             self.loc_k = torch.cat((self.loc_k, cur_k), dim=2)
             self.loc_v = torch.cat((self.loc_v, cur_v), dim=2)
+            self.loc_pos = torch.cat((self.loc_pos, cur_pos), dim=0)
+            self.loc_score = torch.cat((self.loc_score, cur_score), dim=0)
 
         overflow = self.loc_k.shape[2] - self.cfg.local_size
         if overflow > 0:
             ev_k = self.loc_k[:, :, :overflow, :]
             ev_v = self.loc_v[:, :, :overflow, :]
+            ev_pos = self.loc_pos[:overflow]
+            ev_score = self.loc_score[:overflow]
+
             self.loc_k = self.loc_k[:, :, overflow:, :]
             self.loc_v = self.loc_v[:, :, overflow:, :]
-            self._seal_pages(ev_k, ev_v)
+            self.loc_pos = self.loc_pos[overflow:]
+            self.loc_score = self.loc_score[overflow:]
+
+            self._seal_pages(ev_k, ev_v, ev_pos, ev_score)
 
     def stats(self) -> Dict[str, float]:
         n_sink = 0 if self.sink_k is None else self.sink_k.shape[2]
+        n_pinned = 0 if self.pinned_k is None else self.pinned_k.shape[2]
         n_stage = 0 if self.stage_k is None else self.stage_k.shape[2]
         n_loc = 0 if self.loc_k is None else self.loc_k.shape[2]
         n_pages = len(self.pages_k)
-        fetched_cap = min(self.cfg.top_k_pages, n_pages) * self.cfg.page_size if self.cfg.router not in ("full", "streaming_llm") else 0
-        active_vram_slots = n_sink + fetched_cap + n_stage + n_loc
+        if self.cfg.router in ("full", "streaming_llm"):
+            fetched_active = 0.0
+        elif self.last_valid_fetched_avg > 0.0:
+            fetched_active = self.last_valid_fetched_avg
+        else:
+            fetched_active = float(min(self.cfg.top_k_pages, n_pages) * self.cfg.page_size)
+
+        active_vram_slots = float(n_sink + n_pinned + n_stage + n_loc) + fetched_active
         scan_pct = (
             100.0 * self.total_nodes_scored / max(1, self.total_pages_available_sum)
             if self.total_pages_available_sum > 0
@@ -718,7 +970,8 @@ class PagedTreeLayerCache:
         )
         return {
             "tokens_seen": float(self.total_tokens_seen),
-            "active_slots": float(active_vram_slots),
+            "active_slots": round(active_vram_slots),
+            "pinned_slots": float(n_pinned),
             "offloaded_pages": float(n_pages),
             "scan_pct": scan_pct,
             "compression_ratio": max(1.0, self.total_tokens_seen) / max(1.0, active_vram_slots),
@@ -793,8 +1046,10 @@ def _make_paged_forward(
         q_rot = apply_rope_1d(q, chunk_pos, inv_freq, attention_scaling=attention_scaling)
         k_rot = apply_rope_1d(k, chunk_pos, inv_freq, attention_scaling=attention_scaling)
 
-        # Fetch exact routed past pages + GPU-resident sinks/staging/local.
-        k_past, v_past = layer_cache.gather_past_kv(q_rot, device=device, dtype=dtype)
+        # Fetch exact routed past pages (+ optional Halo & Pinned Heavy Hitters).
+        k_past, v_past, past_valid_mask, slices = layer_cache.gather_past_kv(
+            q_rot, device=device, dtype=dtype
+        )
         if k_past is not None:
             m_past = k_past.shape[2]
             k_all = torch.cat((k_past, k_rot), dim=2)
@@ -808,6 +1063,14 @@ def _make_paged_forward(
         v_rep = repeat_kv(v_all, num_kv_groups)
 
         attn_logits = torch.matmul(q_rot.float(), k_rep.float().transpose(-2, -1)) * scale
+        if past_valid_mask is not None and m_past > 0:
+            valid_rep = (
+                past_valid_mask[:, :, None, :]
+                .expand(bsz, num_kv_heads, num_kv_groups, m_past)
+                .reshape(bsz, num_heads, 1, m_past)
+            )
+            attn_logits[..., :m_past] = attn_logits[..., :m_past].masked_fill(~valid_rep, float("-inf"))
+
         if q_len > 1:
             causal = torch.triu(torch.ones((q_len, q_len), device=device, dtype=torch.bool), diagonal=1)
             attn_logits[..., m_past:] = attn_logits[..., m_past:].masked_fill(causal, float("-inf"))
@@ -815,7 +1078,16 @@ def _make_paged_forward(
         attn_weights = torch.softmax(attn_logits, dim=-1)
         attn_output = torch.matmul(attn_weights.to(dtype=v_rep.dtype), v_rep)
 
-        layer_cache.append_chunk(k_rot, v)
+        sal_past = None
+        sal_cur = None
+        if cache.cfg.pinned_size > 0 and cache.cfg.router not in ("full", "streaming_llm"):
+            with torch.no_grad():
+                sal_total = attn_weights[0].sum(dim=1).max(dim=0).values
+                sal_past = sal_total[:m_past] if m_past > 0 else None
+                sal_cur = sal_total[m_past:]
+
+        layer_cache.apply_salience_feedback(sal_past, slices)
+        layer_cache.append_chunk(k_rot, v, pos_chunk=chunk_pos, attn_salience_chunk=sal_cur)
 
         attn_output = attn_output.transpose(1, 2).contiguous().reshape(bsz, q_len, num_heads * head_dim)
         attn_output = attn_module.o_proj(attn_output)

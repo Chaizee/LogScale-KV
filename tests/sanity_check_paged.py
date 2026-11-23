@@ -137,14 +137,73 @@ def test_paged_layer_cache_integrity() -> None:
     assert all(p.device.type == "cpu" for p in cache.pages_k)
 
     q = torch.randn(1, 4, 1, d)
-    kp, vp = cache.gather_past_kv(q, device=torch.device("cpu"), dtype=torch.float32)
+    kp, vp, mask, _ = cache.gather_past_kv(q, device=torch.device("cpu"), dtype=torch.float32)
     assert kp is not None and kp.shape == (1, h_kv, n_sink + cfg.top_k_pages * cfg.page_size + n_stage + n_loc, d)
-    assert vp.shape == kp.shape
+    assert vp.shape == kp.shape and mask is None
     print(f"[PASS] PagedTreeLayerCache token accounting exact ({total} tokens -> {len(cache.pages_k)} CPU pages)")
+
+
+def test_induction_halo_and_pinned_dedup() -> None:
+    """Verify Induction Halo continuity, Pinned Heavy Hitters, zero duplicate positions, and valid_mask."""
+    torch.manual_seed(11)
+    h_kv, d = 2, 16
+    total = 220
+    # Encode exact token position in dim 0 of V so we can verify exact position sets after gathering!
+    k_seq = torch.randn(1, h_kv, total, d)
+    v_seq = torch.randn(1, h_kv, total, d)
+    pos_seq = torch.arange(total, dtype=torch.long)
+    v_seq[:, :, :, 0] = pos_seq.float().view(1, 1, total)
+
+    cfg = PagedTreeConfig(
+        router="chrono_hybrid",
+        sink_size=4,
+        local_size=32,
+        page_size=16,
+        top_k_pages=3,
+        halo_tokens=6,
+        pinned_size=12,
+        beam_width=4,
+        offload_to_cpu=True,
+    )
+    cache = PagedTreeLayerCache(cfg, num_kv_heads=h_kv)
+    for s in range(0, total, 19):
+        e = min(total, s + 19)
+        sal = torch.rand(e - s)
+        cache.append_chunk(
+            k_seq[:, :, s:e, :],
+            v_seq[:, :, s:e, :],
+            pos_chunk=pos_seq[s:e],
+            attn_salience_chunk=sal,
+        )
+
+    assert cache.pinned_k is not None and cache.pinned_k.shape[2] == cfg.pinned_size
+    assert len(cache.pages_k) * cfg.page_size + (0 if cache.stage_k is None else cache.stage_k.shape[2]) + 4 + 32 == total
+
+    q = torch.randn(1, 4, 1, d)
+    kp, vp, valid_mask, slices = cache.gather_past_kv(q, device=torch.device("cpu"), dtype=torch.float32)
+    assert kp is not None and vp is not None
+    assert "pinned" in slices and "local" in slices and "fetched" in slices
+
+    # Verify every KV-head has strictly unique valid token positions (zero double-counting!).
+    for h in range(h_kv):
+        head_pos = vp[0, h, :, 0].round().long()
+        if valid_mask is not None:
+            head_pos = head_pos[valid_mask[0, h]]
+        pos_list = head_pos.tolist()
+        assert len(pos_list) == len(set(pos_list)), f"Duplicate token positions detected in head {h}!"
+        # Verify all pinned positions are present exactly once.
+        for pp in cache.pinned_pos.tolist():
+            assert pp in pos_list, f"Pinned position {pp} missing from gathered KV!"
+
+    print(
+        f"[PASS] Chrono-Hybrid + Induction Halo ({cfg.halo_tokens}) + Pinned ({cfg.pinned_size}): "
+        f"zero duplicate tokens, valid_mask={'active' if valid_mask is not None else 'uniform'}"
+    )
 
 
 if __name__ == "__main__":
     test_rtree_exact_bnb_matches_flat_quest()
     test_chan_parallel_variance_exact()
     test_paged_layer_cache_integrity()
+    test_induction_halo_and_pinned_dedup()
     print("\nAll Paged Tree-Routed KV sanity checks PASSED.")

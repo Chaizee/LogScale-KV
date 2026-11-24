@@ -255,9 +255,21 @@ def test_decoupled_envelopes_and_funnel_beam() -> None:
     ids_funnel, sc_funnel = tree.query_beam(q, top_k=4, beam_width=4, funnel_mult=2)
     assert len(ids_flat) == 4 and len(ids_funnel) == 4
     assert sc_flat < sc_funnel < 256, f"Expected sc_flat ({sc_flat}) < sc_funnel ({sc_funnel}) < 256"
+    # Verify Chrono-Hybrid-L2 catches an isolated single-token needle inside a 64-token Level-1 block
+    # (uses sharp AABB on lvl <= 1 and Moment-UCB on lvl >= 2).
+    tree_l2 = _HeadChronoTree(branching=4, scoring="hybrid_l2")
+    for p in range(64):
+        blk = torch.randn(16, d) * 0.2
+        if p == 27:  # single needle token in page 27 (Level-1 block 6)
+            blk[3] = torch.ones(d) * 6.0
+        tree_l2.insert_page(blk.amin(0), blk.amax(0), blk.mean(0), blk.var(0, unbiased=False), 16.0)
+    q_needle = torch.ones(1, d)
+    ids_l2, sc_l2 = tree_l2.query_beam(q_needle, top_k=4, beam_width=4, funnel_mult=2)
+    assert 27 in ids_l2, f"Chrono-Hybrid-L2 missed isolated needle page 27: got {ids_l2}"
+
     print(
         f"[PASS] Decoupled Envelopes removed outlier (100.0 -> {c_dec.flat_maxs[0].max().item():.2f}); "
-        f"Funnel Beam scanned {sc_funnel}/256 ({100.0 * sc_funnel / 256:.1f}%) vs Flat {sc_flat}/256"
+        f"Funnel Beam {sc_funnel}/256 vs Flat {sc_flat}/256; Hybrid-L2 found isolated needle (page 27, scan={sc_l2}/64)"
     )
 
 

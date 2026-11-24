@@ -267,19 +267,37 @@ def build_paged_suite(args) -> List[Tuple[str, PagedTreeConfig]]:
             (f"10. Chrono-BVH + Halo={h} + Pin={pin} (K={k + 2}, beam=6)", PagedTreeConfig(router="chrono_bvh", top_k_pages=k + 2, halo_tokens=h, pinned_size=pin, **base_wide)),
         ]
 
-    # Default v35 suite: tests T=1 final prompt routing + Decoupled Envelopes + Funnel Beam (lvl>=2).
+    if args.suite == "v35":
+        fm = args.funnel_mult
+        base_wide = {**base, "beam_width": max(args.beam_width, 6)}
+        return [
+            ("1. Full KV (Upper Bound)", PagedTreeConfig(router="full", top_k_pages=k, **base)),
+            (f"2. Flat Quest + Halo={h} (K={k})", PagedTreeConfig(router="flat_quest", top_k_pages=k, halo_tokens=h, pinned_size=0, **base)),
+            (f"3. Chrono-Hybrid + Halo={h} + Pin={pin} (K={k}, flat)", PagedTreeConfig(router="chrono_hybrid", top_k_pages=k, halo_tokens=h, pinned_size=pin, decouple_pinned=False, funnel_mult=1, **base)),
+            (f"4. Chrono-Hybrid + Halo={h} + Pin={pin} + Decoupled (K={k})", PagedTreeConfig(router="chrono_hybrid", top_k_pages=k, halo_tokens=h, pinned_size=pin, decouple_pinned=True, funnel_mult=1, **base)),
+            (f"5. Chrono-Hybrid + Decoupled + Funnel x{fm} (K={k})", PagedTreeConfig(router="chrono_hybrid", top_k_pages=k, halo_tokens=h, pinned_size=pin, decouple_pinned=True, funnel_mult=fm, **base)),
+            (f"6. Chrono-BVH + Decoupled + Funnel x{fm} (K={k})", PagedTreeConfig(router="chrono_bvh", top_k_pages=k, halo_tokens=h, pinned_size=pin, decouple_pinned=True, funnel_mult=fm, **base)),
+            (f"7. Chrono-Hybrid + Decoupled + Funnel x{fm} (K={k + 2})", PagedTreeConfig(router="chrono_hybrid", top_k_pages=k + 2, halo_tokens=h, pinned_size=pin, decouple_pinned=True, funnel_mult=fm, **base)),
+            (f"8. Chrono-Hybrid + Decoupled + Funnel x{fm} (K={k + 2}, beam=6)", PagedTreeConfig(router="chrono_hybrid", top_k_pages=k + 2, halo_tokens=h, pinned_size=pin, decouple_pinned=True, funnel_mult=fm, **base_wide)),
+        ]
+
+    # Default v36 suite: tests Chrono-Hybrid-L2 (AABB on lvl<=1, UCB on lvl>=2) + apples-to-apples K=6 vs Flat Quest.
     fm = args.funnel_mult
     base_wide = {**base, "beam_width": max(args.beam_width, 6)}
-    return [
-        ("1. Full KV (Upper Bound)", PagedTreeConfig(router="full", top_k_pages=k, **base)),
-        (f"2. Flat Quest + Halo={h} (K={k})", PagedTreeConfig(router="flat_quest", top_k_pages=k, halo_tokens=h, pinned_size=0, **base)),
-        (f"3. Chrono-Hybrid + Halo={h} + Pin={pin} (K={k}, flat)", PagedTreeConfig(router="chrono_hybrid", top_k_pages=k, halo_tokens=h, pinned_size=pin, decouple_pinned=False, funnel_mult=1, **base)),
-        (f"4. Chrono-Hybrid + Halo={h} + Pin={pin} + Decoupled (K={k})", PagedTreeConfig(router="chrono_hybrid", top_k_pages=k, halo_tokens=h, pinned_size=pin, decouple_pinned=True, funnel_mult=1, **base)),
-        (f"5. Chrono-Hybrid + Decoupled + Funnel x{fm} (K={k})", PagedTreeConfig(router="chrono_hybrid", top_k_pages=k, halo_tokens=h, pinned_size=pin, decouple_pinned=True, funnel_mult=fm, **base)),
-        (f"6. Chrono-BVH + Decoupled + Funnel x{fm} (K={k})", PagedTreeConfig(router="chrono_bvh", top_k_pages=k, halo_tokens=h, pinned_size=pin, decouple_pinned=True, funnel_mult=fm, **base)),
-        (f"7. Chrono-Hybrid + Decoupled + Funnel x{fm} (K={k + 2})", PagedTreeConfig(router="chrono_hybrid", top_k_pages=k + 2, halo_tokens=h, pinned_size=pin, decouple_pinned=True, funnel_mult=fm, **base)),
-        (f"8. Chrono-Hybrid + Decoupled + Funnel x{fm} (K={k + 2}, beam=6)", PagedTreeConfig(router="chrono_hybrid", top_k_pages=k + 2, halo_tokens=h, pinned_size=pin, decouple_pinned=True, funnel_mult=fm, **base_wide)),
-    ]
+    suite: List[Tuple[str, PagedTreeConfig]] = []
+    if args.include_full:
+        suite.append(("0. Full KV (Upper Bound)", PagedTreeConfig(router="full", top_k_pages=k, **base)))
+    suite.extend(
+        [
+            (f"1. Flat Quest + Halo={h} (K={k})", PagedTreeConfig(router="flat_quest", top_k_pages=k, halo_tokens=h, pinned_size=0, **base)),
+            (f"2. Flat Quest + Halo={h} (K={k + 2})", PagedTreeConfig(router="flat_quest", top_k_pages=k + 2, halo_tokens=h, pinned_size=0, **base)),
+            (f"3. Chrono-Hybrid-L2 + Decoupled + Funnel x{fm} (K={k}, beam={args.beam_width})", PagedTreeConfig(router="chrono_hybrid_l2", top_k_pages=k, halo_tokens=h, pinned_size=pin, decouple_pinned=True, funnel_mult=fm, **base)),
+            (f"4. Chrono-Hybrid-L2 + Decoupled + Funnel x{fm} (K={k + 2}, beam={args.beam_width})", PagedTreeConfig(router="chrono_hybrid_l2", top_k_pages=k + 2, halo_tokens=h, pinned_size=pin, decouple_pinned=True, funnel_mult=fm, **base)),
+            (f"5. Chrono-BVH + Decoupled + Funnel x{fm} (K={k + 2}, beam=6)", PagedTreeConfig(router="chrono_bvh", top_k_pages=k + 2, halo_tokens=h, pinned_size=pin, decouple_pinned=True, funnel_mult=fm, **base_wide)),
+            (f"6. Chrono-Hybrid-L2 + Decoupled + Funnel x{fm} (K={k + 2}, beam=6)", PagedTreeConfig(router="chrono_hybrid_l2", top_k_pages=k + 2, halo_tokens=h, pinned_size=pin, decouple_pinned=True, funnel_mult=fm, **base_wide)),
+        ]
+    )
+    return suite
 
 
 def print_table(rows: List[Dict[str, object]]) -> None:
@@ -310,7 +328,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--sink-size", type=int, default=4)
     p.add_argument("--local-size", type=int, default=128)
     p.add_argument("--page-size", type=int, default=16)
-    p.add_argument("--suite", type=str, default="v35", choices=["v35", "v3", "v2"], help="Benchmark suite (v35=Decoupled+Funnel, v3=Halo+Pin, v2=R-Tree)")
+    p.add_argument("--suite", type=str, default="v36", choices=["v36", "v35", "v3", "v2"], help="Benchmark suite (v36=Hybrid-L2+K6, v35=Decoupled+Funnel, v3=Halo+Pin, v2=R-Tree)")
+    p.add_argument("--include-full", action="store_true", help="Prepend Full KV upper bound in v36 suite (useful for 8192 or 1.5B)")
     p.add_argument("--top-k-pages", type=int, default=4, help="Default K=4 pages * 16 = 64 tokens")
     p.add_argument("--halo-tokens", type=int, default=8, help="Induction Halo tokens appended from next page (0..page_size)")
     p.add_argument("--pinned-size", type=int, default=32, help="Static GPU-pinned Heavy-Hitter anchor budget")

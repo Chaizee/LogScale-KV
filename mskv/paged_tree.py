@@ -31,7 +31,7 @@ from .rope import apply_rope_1d, extract_rope_params
 
 @dataclass
 class PagedTreeConfig:
-    router: str = "chrono_bvh"  # full | streaming_llm | flat_quest | chrono_bvh | chrono_ucb | chrono_hybrid | rtree_beam | rtree_bnb
+    router: str = "chrono_hybrid_l2"  # full | streaming_llm | flat_quest | chrono_bvh | chrono_ucb | chrono_hybrid | chrono_hybrid_l2 | rtree_beam | rtree_bnb
     sink_size: int = 4
     local_size: int = 128
     page_size: int = 16
@@ -162,7 +162,11 @@ class _HeadChronoTree:
             lvl = next_lvl
 
     def _score_nodes(self, q_flat: torch.Tensor, lvl: int, indices: List[int]) -> torch.Tensor:
-        use_aabb = (self.scoring == "aabb") or (self.scoring == "hybrid" and lvl == 0)
+        use_aabb = (
+            (self.scoring == "aabb")
+            or (self.scoring == "hybrid" and lvl == 0)
+            or (self.scoring == "hybrid_l2" and lvl <= 1)
+        )
         if use_aabb:
             b_min = torch.stack([self.mins[lvl][i] for i in indices], dim=0)
             b_max = torch.stack([self.maxs[lvl][i] for i in indices], dim=0)
@@ -526,11 +530,12 @@ class PagedTreeLayerCache:
         # Per-KV-head tree indexes:
         self.chrono_trees: Optional[List[_HeadChronoTree]] = None
         self.rtrees: Optional[List[_HeadRTree]] = None
-        if self.cfg.router in ("chrono_bvh", "chrono_ucb", "chrono_hybrid"):
+        if self.cfg.router in ("chrono_bvh", "chrono_ucb", "chrono_hybrid", "chrono_hybrid_l2"):
             scoring_map = {
                 "chrono_bvh": "aabb",
                 "chrono_ucb": "ucb",
                 "chrono_hybrid": "hybrid",
+                "chrono_hybrid_l2": "hybrid_l2",
             }
             self.chrono_trees = [
                 _HeadChronoTree(

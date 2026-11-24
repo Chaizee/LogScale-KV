@@ -177,6 +177,16 @@
 
 ---
 
+## Глава 6 (Текущий этап — v3.6): `Chrono-Hybrid-L2` + честное сравнение `K=6` и масштабирование на `8192`
+
+Чтобы соединить **лучший `PPL` и `MultiKey`** (`Chrono-Hybrid`, v3.5) с **высоким `NIAH`** (`Chrono-BVH`, v3) на длине `4096+`, добавлены:
+1. **`Chrono-Hybrid-L2` (`chrono_hybrid_l2`):** переносит границу переключения с `lvl >= 1` на **`lvl >= 2`**:
+   * на листьях (`lvl = 0`, 16 токенов) и Уровне 1 (`lvl = 1`, 64 токена) работает острая **`AABB`**-граница (одиночная иголка сохраняет 100% пика);
+   * на грубых верхних уровнях (`lvl >= 2`, 256+ токенов) работает устойчивый к выбросам **`Moment-UCB`**.
+2. **Честная матрица `--suite v36`:** добавлен плоский `Flat Quest + Halo` на **`K=6`** (честное сравнение 1-в-1 по бюджету слотов) и ранее непроверенная пара **`Chrono-BVH + Decoupled + Funnel x2 (K=6, beam=6)`**, плюс флаг `--include-full` для замеров на `8192` и `Qwen2.5-1.5B`.
+
+---
+
 ## Установка (Windows + AMD RX 6600)
 
 ```powershell
@@ -191,19 +201,24 @@ pip install -r requirements.txt
 
 ---
 
-## Запуск экспериментов Главы 5 (v3.5)
+## Запуск экспериментов Главы 6 (v3.6)
 
 ```powershell
+# 1) Быстрый юнит-тест на CPU (включая проверку Chrono-Hybrid-L2 на одиночной иголке)
 python tests/sanity_check_paged.py
-python benchmarks/run_paged_eval.py --model Qwen/Qwen2.5-0.5B-Instruct --text-file eval.txt --suite v35 --seq-len 4096 --chunk-size 32 --local-size 128 --page-size 16 --top-k-pages 4 --beam-width 4 --funnel-mult 2 --halo-tokens 8 --pinned-size 32 --out-json results/paged_v35_4k.json
-python benchmarks/run_paged_eval.py --model Qwen/Qwen2.5-0.5B-Instruct --text-file eval.txt --suite v35 --seq-len 2048 --chunk-size 32 --local-size 128 --page-size 16 --top-k-pages 4 --beam-width 4 --funnel-mult 2 --halo-tokens 8 --pinned-size 32 --out-json results/paged_v35_2k.json
+
+# 2) Проверка v3.6 на 4096 (6 конфигураций, ~10–12 мин; Full KV на 4096 уже замерен в v3.5)
+python benchmarks/run_paged_eval.py --model Qwen/Qwen2.5-0.5B-Instruct --text-file eval.txt --suite v36 --seq-len 4096 --chunk-size 32 --local-size 128 --page-size 16 --top-k-pages 4 --beam-width 4 --funnel-mult 2 --halo-tokens 8 --pinned-size 32 --out-json results/paged_v36_4k.json
+
+# 3) (Если 4096 зайдёт в цель) Масштабирование на 8192 токенов (ожидается Scan% ~18–25% против 100% у Quest!)
+python benchmarks/run_paged_eval.py --model Qwen/Qwen2.5-0.5B-Instruct --text-file eval.txt --suite v36 --include-full --seq-len 8192 --chunk-size 32 --local-size 128 --page-size 16 --top-k-pages 4 --beam-width 4 --funnel-mult 2 --halo-tokens 8 --pinned-size 32 --out-json results/paged_v36_8k.json
 ```
 
 ---
 
 ## Архив команд предыдущих этапов
 <details>
-<summary>Воспроизведение Этапов 1–4</summary>
+<summary>Воспроизведение Этапов 1–5</summary>
 
 ```powershell
 # Этап 1–2 (Векторное дерево v1 + дистилляция GatedCayleyMerger)
@@ -216,5 +231,8 @@ python benchmarks/run_paged_eval.py --model Qwen/Qwen2.5-0.5B-Instruct --text-fi
 
 # Этап 4 (v3: Induction Halo + Pinned Heavy Hitters)
 python benchmarks/run_paged_eval.py --model Qwen/Qwen2.5-0.5B-Instruct --text-file eval.txt --suite v3 --seq-len 2048 --chunk-size 32 --local-size 128 --page-size 16 --top-k-pages 4 --beam-width 4 --halo-tokens 8 --pinned-size 32 --out-json results/paged_v3_2k.json
+
+# Этап 5 (v3.5: T=1 Answer Routing + Decoupled Envelopes + Funnel Beam)
+python benchmarks/run_paged_eval.py --model Qwen/Qwen2.5-0.5B-Instruct --text-file eval.txt --suite v35 --seq-len 4096 --chunk-size 32 --local-size 128 --page-size 16 --top-k-pages 4 --beam-width 4 --funnel-mult 2 --halo-tokens 8 --pinned-size 32 --out-json results/paged_v35_4k.json
 ```
 </details>

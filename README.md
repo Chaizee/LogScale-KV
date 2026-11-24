@@ -86,13 +86,60 @@
 
 ---
 
-## Глава 4 (Текущий этап — v3): `ChronoTree-Halo + Pinned Heavy Hitters`
+## Глава 4. Эксперимент v3: `ChronoTree-Halo + Pinned Heavy Hitters` (`results/paged_v3_2k.json`, `results/paged_v3_4k.json`)
 
-Чтобы одновременно **побить `H2O-Lite` по PPL, побить `Flat Quest` по NIAH/MultiKey и сохранить $O(\log N)$ отсечение `Scan%`**, в `mskv/paged_tree.py` добавлены три точечных улучшения:
+Чтобы одновременно побить `H2O-Lite` по PPL, побить `Flat Quest` по NIAH/MultiKey и сохранить $O(\log N)$ отсечение `Scan%`, были добавлены три компонента:
+1. **Induction Halo (`halo_tokens = 8`):** при подгрузке страницы `p` дочитываются 8 смежных токенов начала страницы `p + 1` (с точной дедупликацией по позициям).
+2. **`Chrono-Hybrid`:** `Moment-UCB` (формула Чана + EVT) на верхних уровнях ($l \ge 1$) и острая `AABB`-коробка на листьях ($l = 0$).
+3. **Pinned Heavy Hitters (`pinned_size = 32`):** 32 постоянных структурных токена на GPU с полной дедупликацией и маскированием `past_valid_mask`.
 
-1. **Induction Halo (`halo_tokens = 8`):** при подгрузке выбранной страницы `p` из непрерывного буфера ОЗУ мы бесплатно дочитываем следующие `halo_tokens` токенов начала страницы `p + 1` (с точной дедупликацией по позициям, если `p + 1` уже выбрана). Ни одна связка «ключ → значение» больше не рвётся на границе страницы.
-2. **Гибридный скоринг дерева (`chrono_hybrid`):** на верхних грубых уровнях ($l \ge 1$) используется устойчивый к выбросам **Moment-UCB** (параллельная формула Чана + EVT-граница), а на листьях ($l = 0$, страницы по 16 токенов) — острая верхняя граница **AABB** для ловли одиночных иголок.
-3. **Pinned Heavy Hitters (`pinned_size = 32`):** крошечный GPU-пул из 32 постоянных «тяжёлых» токенов (для гладкого PPL) + динамические страницы `Chrono-Tree` с Halo (для NIAH/MultiKey), с **точной дедупликацией и маскированием** (никакого двойного учёта токенов в Softmax!).
+### Результаты v3 на `seq-len 2048` (*Warlock's Shadow*, `eval.txt`)
+
+| Конфигурация | PPL ↓ | NIAH% ↑ | MultiKey% ↑ | ActiveSlots | Сжатие | Scan% ↓ | Tok/s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **1. Full KV (верхняя граница)** | **23.74** | **100%** | **100%** | 2048 | 1.0× | 0.0% | 104.8 |
+| **2. StreamingLLM (выброс)** | 30.37 | 0% | 0% | 132 | 15.5× | 0.0% | 103.8 |
+| **3. Flat Quest (K=4, no halo)** | 26.42 | 80% | 50% | 208 | 9.8× | 100.0% | 95.8 |
+| **4. Flat Quest + Halo=8 (K=4)** | 25.96 | **100%** | 25% | 232 | 8.8× | 100.0% | 99.6 |
+| **5. Chrono-BVH (K=4, no halo)** | 26.48 | 80% | 25% | 208 | 9.8× | 49.5% | 86.4 |
+| **6. Chrono-BVH + Halo=8 (K=4)** | 26.16 | 80% | 50% | 232 | 8.8× | 49.5% | 84.9 |
+| **7. Chrono-Hybrid + Halo=8 (K=4)** | 25.97 | **100%** | 25% | 232 | 8.8× | **48.3%** | 83.8 |
+| **8. Chrono-BVH + Halo=8 + Pin=32 (K=4)** | **25.21** | **100%** | 25% | 263 | 7.8× | 49.5% | 80.1 |
+| **9. Chrono-Hybrid + Halo=8 + Pin=32 (K=4)** | 25.38 | **100%** | 25% | 264 | 7.8× | **48.3%** | 79.4 |
+| **10. Chrono-BVH + Halo=8 + Pin=32 (K=6, beam=6)** | **24.89** | **100%** | **75%** | 291 | 7.0× | 62.2% | 73.3 |
+
+### Результаты v3 на `seq-len 4096` (проверка $O(\log N)$ масштабирования)
+
+| Конфигурация | PPL ↓ | NIAH% ↑ | MultiKey% ↑ | ActiveSlots | Сжатие | Scan% ↓ | Tok/s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **3. Flat Quest (K=4, no halo)** | 25.78 | 60% | 0% | 208 | 19.7× | 100.0% | 102.4 |
+| **4. Flat Quest + Halo=8 (K=4)** | 25.42 | **80%** | **25%** | 236 | 17.4× | 100.0% | 99.7 |
+| **5. Chrono-BVH (K=4, no halo)** | 26.17 | 0% | 0% | 208 | 19.7× | 29.9% | 85.6 |
+| **6. Chrono-BVH + Halo=8 (K=4)** | 25.78 | 0% | 0% | 236 | 17.4× | 29.9% | 82.6 |
+| **7. Chrono-Hybrid + Halo=8 (K=4)** | 25.51 | 20% | **25%** | 236 | 17.4× | **29.3%** | 81.2 |
+| **8. Chrono-BVH + Halo=8 + Pin=32 (K=4)** | 24.67 | 20% | 0% | 268 | 15.3× | 29.9% | 78.3 |
+| **9. Chrono-Hybrid + Halo=8 + Pin=32 (K=4)** | **24.40** | 20% | **25%** | 268 | 15.3× | **29.3%** | 76.9 |
+| **10. Chrono-BVH + Halo=8 + Pin=32 (K=6, beam=6)** | **24.29** | **80%** | **25%** | 308 | 13.3× | **39.6%** | 76.7 |
+
+### Главные выводы Главы 4 (что сработало и что вскрылось на `4096`)
+1. **На `2048` пройдена полная Парето-победа:**
+   * `Halo=8` поднял NIAH у `Flat Quest` и `Chrono-Hybrid` с `80% -> 100%` (и на `4096` у `Flat Quest` с `60% / 0% -> 80% / 25%`).
+   * `Pin=32` уронил `PPL` ниже `H2O-Lite` (`25.21` vs `25.69`) при **`100%` NIAH**; на `K=6, beam=6` получено **`PPL = 24.89`, `NIAH = 100%`, `MultiKey = 75%`**.
+2. **Логарифмическое падение `Scan%` на `4096` подтверждено:** `49.5% -> 29.9%` (`beam=4`) и `62.2% -> 39.6%` (`beam=6`). Строка 10 уже на `4096` доминирует над `Flat Quest + Halo` (`PPL 24.29 vs 25.42`, `NIAH 80% == 80%`, `MultiKey 25% == 25%` при **2.5× меньшем скане** и **13.3× сжатии**).
+3. **На длинном дереве `Chrono-Hybrid` побил `Chrono-BVH` по всем метрикам** (`24.40 vs 24.67` PPL, `25% vs 0%` MultiKey, `29.3% vs 29.9%` Scan).
+4. **Вскрыты 3 причины провала `beam=4` на `4096` (`0–20%` NIAH) и неполного `MultiKey`:**
+   * **Захват Level 2 выбросами:** на `4096` на уровне 2 появляется 16 блоков по 256 токенов; 3–4 блока, содержащие «тяжёлые» структурные выбросы, раздувают свои огибающие и забирают все 4 слота `beam=4`, хотя сами эти токены **уже закреплены в `Pin=32`**! Расширение до `beam=6` мгновенно вернуло `NIAH = 80%`.
+   * **Чанк `32` на последнем токене вопроса (`"Answer:"`):** первая цифра 6-значного кода предсказывалась внутри 32-токенного чанка префилла, где 31 соседний токен конкурировал за те же `K = 4` слота.
+   * **Недоставал эталон `Full KV` на `4096`** для оценки реального потолка модели `0.5B` на `MultiKey`.
+
+---
+
+## Глава 5 (Текущий этап — v3.5): `T=1 Answer Routing + Decoupled Envelopes + Funnel Beam`
+
+Внесены 3 чистых, изолированных улучшения в [mskv/paged_tree.py](mskv/paged_tree.py) и [benchmarks/run_paged_eval.py](benchmarks/run_paged_eval.py):
+1. **Выделенный `T = 1` шаг для финального токена вопроса (`"Answer:"`):** префилл идёт чанками по `prompt[:-1]`, а последний токен промпта (выдающий 1-ю цифру ответа) маршрутизируется отдельно в точном режиме декодинга `T = 1`.
+2. **Decoupled Envelopes (`decouple_pinned = True`):** токены, уже закреплённые в `Pin=32` на GPU, исключаются из расчёта огибающих `p_min / p_max / p_mean / p_var` при запечатывании страниц, чтобы структурные «громоотводы» не раздували верхние узлы эпизодического дерева.
+3. **Funnel Beam Search (`funnel_mult = 2`):** на грубых верхних уровнях ($l \ge 2$, где узлов мало и ошибка дорога) луч вдвое шире (`2 * beam_width`), а на тонком уровне ($l = 1$) сужается до `beam_width` — защищает иголку на `4096+` при `Scan ≈ 35%`.
 
 ---
 
@@ -110,37 +157,36 @@ pip install -r requirements.txt
 
 ---
 
-## Запуск экспериментов Главы 4 (v3)
+## Запуск экспериментов Главы 5 (v3.5)
 
-### Шаг 1. Юнит-тесты Halo, дедупликации Pinned + Pages и Chrono-Hybrid (CPU, 2 секунды)
+### Шаг 1. Юнит-тесты Decoupled Envelopes, Funnel Beam, Halo и дедупликации (CPU, 2 секунды)
 ```powershell
 python tests/sanity_check_paged.py
 ```
 
-### Шаг 2. Главная таблица v3 на `eval.txt` (`seq-len 2048`)
-Сравнивает `Full KV`, `StreamingLLM`, `Flat Quest` (с/без Halo), `Chrono-BVH` (с/без Halo), `Chrono-Hybrid + Halo` и полный гибрид **`ChronoTree + Halo + Pin32`**:
+### Шаг 2. Решающий прогон v3.5 на `seq-len 4096` (включая эталон `Full KV`!)
+Изолированно проверяет вклад `T=1 Answer Routing`, `Decoupled Envelopes`, `Funnel Beam x2`, `Chrono-Hybrid vs Chrono-BVH` и `K=6`:
 ```powershell
-python benchmarks/run_paged_eval.py --model Qwen/Qwen2.5-0.5B-Instruct --text-file eval.txt --seq-len 2048 --chunk-size 32 --local-size 128 --page-size 16 --top-k-pages 4 --beam-width 4 --halo-tokens 8 --pinned-size 32 --out-json results/paged_v3_2k.json
+python benchmarks/run_paged_eval.py --model Qwen/Qwen2.5-0.5B-Instruct --text-file eval.txt --suite v35 --seq-len 4096 --chunk-size 32 --local-size 128 --page-size 16 --top-k-pages 4 --beam-width 4 --funnel-mult 2 --halo-tokens 8 --pinned-size 32 --out-json results/paged_v35_4k.json
 ```
 
-### Шаг 3. Проверка масштабирования $O(\log N)$ на длине `4096`
-Проверяем, как падает `Scan%` у `Chrono-BVH / Chrono-Hybrid` (ожидается падение с `~49%` до `~25–30%` против `100%` у `Flat Quest`) при сохранении качества:
+### Шаг 3. (Опционально) Тот же прогон v3.5 на `seq-len 2048` для полной симметрии таблиц
 ```powershell
-python benchmarks/run_paged_eval.py --model Qwen/Qwen2.5-0.5B-Instruct --text-file eval.txt --seq-len 4096 --chunk-size 32 --local-size 128 --page-size 16 --top-k-pages 4 --beam-width 4 --halo-tokens 8 --pinned-size 32 --routers flat_quest,chrono_bvh,chrono_hybrid --out-json results/paged_v3_4k.json
+python benchmarks/run_paged_eval.py --model Qwen/Qwen2.5-0.5B-Instruct --text-file eval.txt --suite v35 --seq-len 2048 --chunk-size 32 --local-size 128 --page-size 16 --top-k-pages 4 --beam-width 4 --funnel-mult 2 --halo-tokens 8 --pinned-size 32 --out-json results/paged_v35_2k.json
 ```
 
 ---
 
-## Целевые критерии успеха Главы 4
-1. **Эффект Induction Halo:** рост `NIAH` (`80% -> 100%`) и `MultiKey` (`25–50% -> 75–100%`) при сравнении одних и тех же роутеров без Halo и с `halo = 8`.
-2. **Эффект Pinned Heavy Hitters (`Pin32`):** снижение `PPL` ниже `H2O-Lite` (`< 25.69`, ближе к `Full KV = 23.75`) при одновременном сохранении `NIAH/MultiKey = 80–100%`.
-3. **Масштабирование $O(\log N)$:** падение `Scan%` при переходе `2048 -> 4096` примерно в ~1.8–2× при сохранении качества `Flat Quest` (`100%`).
+## Целевые критерии успеха Главы 5 (v3.5 на `4096`)
+1. **`T=1 Answer Routing` + `Decoupled` + `Funnel Beam x2` (Строка 5 vs Строка 3):** вернуть `NIAH` на `K=4, beam=4` с `20%` обратно к **`80–100%`** при `Scan% ≈ 34–38%` (почти в 3× меньше `Flat Quest = 100%`).
+2. **Рост `MultiKey`:** поднять `MultiKey%` за счёт честного `T=1` роутинга первой цифры ответа (особенно на `K=6` — Строки 7–8).
+3. **Эталон `Full KV` на `4096`:** впервые зафиксировать честную верхнюю границу `0.5B` на длине `4096`, чтобы точно видеть процент восстановления качества.
 
 ---
 
 ## Архив команд предыдущих этапов
 <details>
-<summary>Воспроизведение Этапов 1–3</summary>
+<summary>Воспроизведение Этапов 1–4</summary>
 
 ```powershell
 # Этап 1–2 (Векторное дерево v1 + дистилляция GatedCayleyMerger)
@@ -150,5 +196,8 @@ python train_distill.py --model Qwen/Qwen2.5-0.5B-Instruct --text-file train.txt
 
 # Этап 3 (v2: сравнение KV R-Tree vs Chrono-BVH / Chrono-UCB)
 python benchmarks/run_paged_eval.py --model Qwen/Qwen2.5-0.5B-Instruct --text-file eval.txt --suite v2 --seq-len 2048 --chunk-size 32 --local-size 128 --page-size 16 --top-k-pages 4 --beam-width 4 --out-json results/paged_tree_2k.json
+
+# Этап 4 (v3: Induction Halo + Pinned Heavy Hitters)
+python benchmarks/run_paged_eval.py --model Qwen/Qwen2.5-0.5B-Instruct --text-file eval.txt --suite v3 --seq-len 2048 --chunk-size 32 --local-size 128 --page-size 16 --top-k-pages 4 --beam-width 4 --halo-tokens 8 --pinned-size 32 --out-json results/paged_v3_2k.json
 ```
 </details>

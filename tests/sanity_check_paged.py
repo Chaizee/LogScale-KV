@@ -201,9 +201,70 @@ def test_induction_halo_and_pinned_dedup() -> None:
     )
 
 
+def test_decoupled_envelopes_and_funnel_beam() -> None:
+    """Verify Decoupled Envelopes strip pinned massive-activation outliers and Funnel Beam scales cleanly."""
+    torch.manual_seed(17)
+    h_kv, d = 2, 16
+    total = 100
+    k_seq = torch.randn(1, h_kv, total, d) * 0.5
+    v_seq = torch.randn(1, h_kv, total, d)
+    pos_seq = torch.arange(total, dtype=torch.long)
+
+    # Inject a massive-activation structural outlier at position 10 with huge salience score!
+    k_seq[:, :, 10, :] = 100.0
+    sal = torch.ones(total)
+    sal[10] = 999.0
+
+    cfg_coupled = PagedTreeConfig(
+        router="chrono_hybrid",
+        sink_size=4,
+        local_size=32,
+        page_size=16,
+        top_k_pages=2,
+        pinned_size=4,
+        decouple_pinned=False,
+        offload_to_cpu=True,
+    )
+    cfg_decoupled = PagedTreeConfig(
+        router="chrono_hybrid",
+        sink_size=4,
+        local_size=32,
+        page_size=16,
+        top_k_pages=2,
+        pinned_size=4,
+        decouple_pinned=True,
+        offload_to_cpu=True,
+    )
+    c_coup = PagedTreeLayerCache(cfg_coupled, num_kv_heads=h_kv)
+    c_dec = PagedTreeLayerCache(cfg_decoupled, num_kv_heads=h_kv)
+    c_coup.append_chunk(k_seq, v_seq, pos_chunk=pos_seq, attn_salience_chunk=sal)
+    c_dec.append_chunk(k_seq, v_seq, pos_chunk=pos_seq, attn_salience_chunk=sal)
+
+    # Page 0 holds positions 4..19 (includes outlier at pos 10).
+    assert c_coup.flat_maxs[0].max().item() > 90.0, "Coupled envelope should contain outlier 100.0"
+    assert c_dec.flat_maxs[0].max().item() < 5.0, "Decoupled envelope must exclude pinned outlier!"
+    assert 10 in c_dec.pinned_pos.tolist(), "Outlier pos 10 must be preserved in pinned_pool"
+
+    # Verify Funnel Beam visits strictly more coarse nodes than flat beam on a 256-page tree, while << 100%.
+    tree = _HeadChronoTree(branching=4, scoring="hybrid")
+    for _ in range(256):
+        blk = torch.randn(16, d)
+        tree.insert_page(blk.amin(0), blk.amax(0), blk.mean(0), blk.var(0, unbiased=False), 16.0)
+    q = torch.randn(1, d)
+    ids_flat, sc_flat = tree.query_beam(q, top_k=4, beam_width=4, funnel_mult=1)
+    ids_funnel, sc_funnel = tree.query_beam(q, top_k=4, beam_width=4, funnel_mult=2)
+    assert len(ids_flat) == 4 and len(ids_funnel) == 4
+    assert sc_flat < sc_funnel < 256, f"Expected sc_flat ({sc_flat}) < sc_funnel ({sc_funnel}) < 256"
+    print(
+        f"[PASS] Decoupled Envelopes removed outlier (100.0 -> {c_dec.flat_maxs[0].max().item():.2f}); "
+        f"Funnel Beam scanned {sc_funnel}/256 ({100.0 * sc_funnel / 256:.1f}%) vs Flat {sc_flat}/256"
+    )
+
+
 if __name__ == "__main__":
     test_rtree_exact_bnb_matches_flat_quest()
     test_chan_parallel_variance_exact()
     test_paged_layer_cache_integrity()
     test_induction_halo_and_pinned_dedup()
+    test_decoupled_envelopes_and_funnel_beam()
     print("\nAll Paged Tree-Routed KV sanity checks PASSED.")

@@ -38,7 +38,9 @@ class PagedTreeConfig:
     top_k_pages: int = 4  # fetched exact pages per KV-head (e.g., 4*16=64 tokens)
     halo_tokens: int = 0  # Induction Halo: extra contiguous tokens read from page p+1 (0..page_size)
     pinned_size: int = 0  # GPU-resident static Heavy-Hitter anchors (deduplicated against fetched pages)
-    beam_width: int = 4  # top-down beam width for tree beam search
+    decouple_pinned: bool = False  # Exclude GPU-pinned outlier tokens from page envelopes (prevents Level-2 bloat)
+    beam_width: int = 4  # top-down beam width at fine levels (lvl == 1)
+    funnel_mult: int = 1  # Funnel Beam multiplier on coarse upper levels (lvl >= 2): e.g. 2 => 2*beam_width
     branching: int = 4  # branching factor for chrono trees
     rtree_max_fanout: int = 8  # max children per Streaming KV R-Tree node
     ucb_beta: float = 1.0  # exploration factor for chrono_ucb / chrono_hybrid EVT bound
@@ -170,7 +172,13 @@ class _HeadChronoTree:
         cnts = torch.tensor([self.counts[lvl][i] for i in indices], dtype=torch.float32)
         return _ucb_scores(q_flat, means, variances, cnts, beta=self.ucb_beta)
 
-    def query_beam(self, q_flat: torch.Tensor, top_k: int, beam_width: int) -> Tuple[List[int], int]:
+    def query_beam(
+        self,
+        q_flat: torch.Tensor,
+        top_k: int,
+        beam_width: int,
+        funnel_mult: int = 1,
+    ) -> Tuple[List[int], int]:
         n_pages = self.num_pages()
         if n_pages <= top_k:
             return list(range(n_pages)), n_pages
@@ -178,6 +186,7 @@ class _HeadChronoTree:
         # At most one rightmost subtree at level 1 is partial (>= 1 page); all others have b pages.
         min_safe_beam = math.ceil(max(0, top_k - 1) / self.b) + 1
         eff_beam = max(beam_width, min_safe_beam, 1)
+        coarse_beam = eff_beam * max(1, int(funnel_mult))
 
         top_lvl = len(self.mins) - 1
         active = list(range(len(self.mins[top_lvl])))
@@ -195,7 +204,12 @@ class _HeadChronoTree:
             if not candidates:
                 break
 
-            limit = top_k if child_lvl == 0 else eff_beam
+            if child_lvl == 0:
+                limit = top_k
+            elif child_lvl >= 2:
+                limit = coarse_beam
+            else:
+                limit = eff_beam
             if len(candidates) <= limit:
                 active = candidates
             else:
@@ -626,6 +640,12 @@ class PagedTreeLayerCache:
         if self.cfg.pinned_size > 0:
             self._update_pinned_pool(k_seal, v_seal, pos_seal, score_seal)
 
+        pinned_set = (
+            set(self.pinned_pos.tolist())
+            if (self.cfg.decouple_pinned and self.pinned_pos is not None)
+            else set()
+        )
+
         # Compute page descriptors on CPU float32 and store exact pages in host RAM (if offloading).
         for p in range(n_new_pages):
             kp = k_seal[0, :, p * p_sz : (p + 1) * p_sz, :]  # (H_kv, P, D)
@@ -633,10 +653,20 @@ class PagedTreeLayerCache:
             pp = pos_seal[p * p_sz : (p + 1) * p_sz]  # (P,) int64 on CPU
 
             kp_f_cpu = kp.detach().to(device="cpu", dtype=torch.float32)
-            p_min = kp_f_cpu.amin(dim=1)  # (H_kv, D)
-            p_max = kp_f_cpu.amax(dim=1)  # (H_kv, D)
-            p_mean = kp_f_cpu.mean(dim=1)  # (H_kv, D)
-            p_var = kp_f_cpu.var(dim=1, unbiased=False)  # (H_kv, D)
+
+            # Decoupled Envelopes: exclude already-GPU-pinned structural outliers from tree descriptors
+            # so massive-activation anchors do not bloat coarse Level-2 bounding boxes.
+            env_k = kp_f_cpu
+            if pinned_set:
+                keep = [i for i, pos_val in enumerate(pp.tolist()) if pos_val not in pinned_set]
+                if keep:
+                    env_k = kp_f_cpu[:, keep, :]
+
+            p_min = env_k.amin(dim=1)  # (H_kv, D)
+            p_max = env_k.amax(dim=1)  # (H_kv, D)
+            p_mean = env_k.mean(dim=1)  # (H_kv, D)
+            p_var = env_k.var(dim=1, unbiased=False)  # (H_kv, D)
+            env_count = float(env_k.shape[1])
 
             page_id = len(self.pages_k)
             if self.cfg.offload_to_cpu:
@@ -653,7 +683,7 @@ class PagedTreeLayerCache:
             if self.chrono_trees is not None:
                 for h in range(self.num_kv_heads):
                     self.chrono_trees[h].insert_page(
-                        p_min[h], p_max[h], p_mean[h], p_var[h], float(p_sz)
+                        p_min[h], p_max[h], p_mean[h], p_var[h], env_count
                     )
             elif self.rtrees is not None:
                 for h in range(self.num_kv_heads):
@@ -696,7 +726,12 @@ class PagedTreeLayerCache:
                 scored_this_step += n_pages
         elif self.chrono_trees is not None:
             for h in range(self.num_kv_heads):
-                ids, sc = self.chrono_trees[h].query_beam(q_cpu[h], top_k=top_k, beam_width=self.cfg.beam_width)
+                ids, sc = self.chrono_trees[h].query_beam(
+                    q_cpu[h],
+                    top_k=top_k,
+                    beam_width=self.cfg.beam_width,
+                    funnel_mult=self.cfg.funnel_mult,
+                )
                 selected_per_head.append(ids)
                 scored_this_step += sc
         elif self.rtrees is not None:

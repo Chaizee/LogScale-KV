@@ -1,0 +1,310 @@
+{
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "seq_len": 2048,
+  "rows": [
+    {
+      "name": "1. Full KV (Upper Bound)",
+      "config": {
+        "router": "full",
+        "sink_size": 4,
+        "local_size": 128,
+        "page_size": 16,
+        "top_k_pages": 4,
+        "beam_width": 4,
+        "branching": 4,
+        "rtree_max_fanout": 8,
+        "ucb_beta": 1.0,
+        "offload_to_cpu": true
+      },
+      "ppl": 23.745564697007854,
+      "nll": 3.167395763441103,
+      "active_slots": 2048,
+      "compression_x": 1.0,
+      "scan_pct": 0.0,
+      "tok_per_sec": 387.34526379438125,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 100.0,
+      "niah_per_depth": {
+        "10%": true,
+        "30%": true,
+        "50%": true,
+        "70%": true,
+        "90%": true
+      },
+      "niah_scan_pct": 0.0,
+      "multikey_acc": 100.0,
+      "multikey_details": {
+        "ALPHA-ORBIT": true,
+        "BETA-QUARTZ": true,
+        "GAMMA-PULSE": true,
+        "DELTA-PRISM": true
+      }
+    },
+    {
+      "name": "2. StreamingLLM (Eviction)",
+      "config": {
+        "router": "streaming_llm",
+        "sink_size": 4,
+        "local_size": 128,
+        "page_size": 16,
+        "top_k_pages": 4,
+        "beam_width": 4,
+        "branching": 4,
+        "rtree_max_fanout": 8,
+        "ucb_beta": 1.0,
+        "offload_to_cpu": true
+      },
+      "ppl": 30.376363556082715,
+      "nll": 3.413664791388387,
+      "active_slots": 132,
+      "compression_x": 15.515151515151516,
+      "scan_pct": 0.0,
+      "tok_per_sec": 411.26563404321564,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 0.0,
+      "niah_per_depth": {
+        "10%": false,
+        "30%": false,
+        "50%": false,
+        "70%": false,
+        "90%": false
+      },
+      "niah_scan_pct": 0.0,
+      "multikey_acc": 0.0,
+      "multikey_details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": false,
+        "DELTA-PRISM": false
+      }
+    },
+    {
+      "name": "3. Flat Quest (AABB, 100% scan, K=4)",
+      "config": {
+        "router": "flat_quest",
+        "sink_size": 4,
+        "local_size": 128,
+        "page_size": 16,
+        "top_k_pages": 4,
+        "beam_width": 4,
+        "branching": 4,
+        "rtree_max_fanout": 8,
+        "ucb_beta": 1.0,
+        "offload_to_cpu": true
+      },
+      "ppl": 26.426189459341742,
+      "nll": 3.2743555433957408,
+      "active_slots": 208,
+      "compression_x": 9.846153846153847,
+      "scan_pct": 100.0,
+      "tok_per_sec": 259.07501642335944,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 80.0,
+      "niah_per_depth": {
+        "10%": true,
+        "30%": true,
+        "50%": true,
+        "70%": true,
+        "90%": false
+      },
+      "niah_scan_pct": 100.0,
+      "multikey_acc": 50.0,
+      "multikey_details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": true,
+        "DELTA-PRISM": true
+      }
+    },
+    {
+      "name": "4. Chrono-BVH Tree (AABB, beam, K=4)",
+      "config": {
+        "router": "chrono_bvh",
+        "sink_size": 4,
+        "local_size": 128,
+        "page_size": 16,
+        "top_k_pages": 4,
+        "beam_width": 4,
+        "branching": 4,
+        "rtree_max_fanout": 8,
+        "ucb_beta": 1.0,
+        "offload_to_cpu": true
+      },
+      "ppl": 26.47791176249026,
+      "nll": 3.2763108670259733,
+      "active_slots": 208,
+      "compression_x": 9.846153846153847,
+      "scan_pct": 49.531384659580574,
+      "tok_per_sec": 155.45324518972697,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 80.0,
+      "niah_per_depth": {
+        "10%": true,
+        "30%": true,
+        "50%": true,
+        "70%": true,
+        "90%": false
+      },
+      "niah_scan_pct": 41.68459348307498,
+      "multikey_acc": 25.0,
+      "multikey_details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": true,
+        "DELTA-PRISM": false
+      }
+    },
+    {
+      "name": "5. Chrono-UCB Tree (Mean+Var, beam, K=4)",
+      "config": {
+        "router": "chrono_ucb",
+        "sink_size": 4,
+        "local_size": 128,
+        "page_size": 16,
+        "top_k_pages": 4,
+        "beam_width": 4,
+        "branching": 4,
+        "rtree_max_fanout": 8,
+        "ucb_beta": 1.0,
+        "offload_to_cpu": true
+      },
+      "ppl": 26.52988306540355,
+      "nll": 3.2782717605034306,
+      "active_slots": 208,
+      "compression_x": 9.846153846153847,
+      "scan_pct": 48.26738006320023,
+      "tok_per_sec": 180.61534359972651,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 80.0,
+      "niah_per_depth": {
+        "10%": true,
+        "30%": false,
+        "50%": true,
+        "70%": true,
+        "90%": true
+      },
+      "niah_scan_pct": 40.79200938521565,
+      "multikey_acc": 25.0,
+      "multikey_details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": false,
+        "DELTA-PRISM": true
+      }
+    },
+    {
+      "name": "6. KV R-Tree Beam (Semantic AABB, K=4)",
+      "config": {
+        "router": "rtree_beam",
+        "sink_size": 4,
+        "local_size": 128,
+        "page_size": 16,
+        "top_k_pages": 4,
+        "beam_width": 4,
+        "branching": 4,
+        "rtree_max_fanout": 8,
+        "ucb_beta": 1.0,
+        "offload_to_cpu": true
+      },
+      "ppl": 26.722472939315097,
+      "nll": 3.2855048945100145,
+      "active_slots": 208,
+      "compression_x": 9.846153846153847,
+      "scan_pct": 66.9976299913818,
+      "tok_per_sec": 176.69591562130773,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 60.0,
+      "niah_per_depth": {
+        "10%": true,
+        "30%": false,
+        "50%": true,
+        "70%": false,
+        "90%": true
+      },
+      "niah_scan_pct": 60.1813772013076,
+      "multikey_acc": 0.0,
+      "multikey_details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": false,
+        "DELTA-PRISM": false
+      }
+    },
+    {
+      "name": "7. KV R-Tree Exact BnB (Lossless, K=4)",
+      "config": {
+        "router": "rtree_bnb",
+        "sink_size": 4,
+        "local_size": 128,
+        "page_size": 16,
+        "top_k_pages": 4,
+        "beam_width": 4,
+        "branching": 4,
+        "rtree_max_fanout": 8,
+        "ucb_beta": 1.0,
+        "offload_to_cpu": true
+      },
+      "ppl": 26.426189459341742,
+      "nll": 3.2743555433957408,
+      "active_slots": 208,
+      "compression_x": 9.846153846153847,
+      "scan_pct": 132.79589198506176,
+      "tok_per_sec": 86.89209570692395,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 80.0,
+      "niah_per_depth": {
+        "10%": true,
+        "30%": true,
+        "50%": true,
+        "70%": true,
+        "90%": false
+      },
+      "niah_scan_pct": 128.57587261415162,
+      "multikey_acc": 50.0,
+      "multikey_details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": true,
+        "DELTA-PRISM": true
+      }
+    },
+    {
+      "name": "8. KV R-Tree Beam (Semantic AABB, K=8)",
+      "config": {
+        "router": "rtree_beam",
+        "sink_size": 4,
+        "local_size": 128,
+        "page_size": 16,
+        "top_k_pages": 8,
+        "beam_width": 4,
+        "branching": 4,
+        "rtree_max_fanout": 8,
+        "ucb_beta": 1.0,
+        "offload_to_cpu": true
+      },
+      "ppl": 25.817409656342956,
+      "nll": 3.2510490572387347,
+      "active_slots": 272,
+      "compression_x": 7.529411764705882,
+      "scan_pct": 67.25916882121997,
+      "tok_per_sec": 160.75568863008954,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 20.0,
+      "niah_per_depth": {
+        "10%": false,
+        "30%": false,
+        "50%": true,
+        "70%": false,
+        "90%": false
+      },
+      "niah_scan_pct": 60.33395286301802,
+      "multikey_acc": 0.0,
+      "multikey_details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": false,
+        "DELTA-PRISM": false
+      }
+    }
+  ]
+}

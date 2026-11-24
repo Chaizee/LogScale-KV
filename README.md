@@ -134,12 +134,46 @@
 
 ---
 
-## Глава 5 (Текущий этап — v3.5): `T=1 Answer Routing + Decoupled Envelopes + Funnel Beam`
+## Глава 5. Эксперимент v3.5: `T=1 Answer Routing + Decoupled Envelopes + Funnel Beam` (`results/paged_v35_2k.json`, `results/paged_v35_4k.json`)
 
 Внесены 3 чистых, изолированных улучшения в [mskv/paged_tree.py](mskv/paged_tree.py) и [benchmarks/run_paged_eval.py](benchmarks/run_paged_eval.py):
 1. **Выделенный `T = 1` шаг для финального токена вопроса (`"Answer:"`):** префилл идёт чанками по `prompt[:-1]`, а последний токен промпта (выдающий 1-ю цифру ответа) маршрутизируется отдельно в точном режиме декодинга `T = 1`.
 2. **Decoupled Envelopes (`decouple_pinned = True`):** токены, уже закреплённые в `Pin=32` на GPU, исключаются из расчёта огибающих `p_min / p_max / p_mean / p_var` при запечатывании страниц, чтобы структурные «громоотводы» не раздували верхние узлы эпизодического дерева.
-3. **Funnel Beam Search (`funnel_mult = 2`):** на грубых верхних уровнях ($l \ge 2$, где узлов мало и ошибка дорога) луч вдвое шире (`2 * beam_width`), а на тонком уровне ($l = 1$) сужается до `beam_width` — защищает иголку на `4096+` при `Scan ≈ 35%`.
+3. **Funnel Beam Search (`funnel_mult = 2`):** на грубых верхних уровнях ($l \ge 2$, где узлов мало и ошибка дорога) луч вдвое шире (`2 * beam_width`), а на тонком уровне ($l = 1$) сужается до `beam_width`.
+
+### Результаты v3.5 на `seq-len 2048` (*Warlock's Shadow*, `eval.txt`)
+
+| Конфигурация | PPL ↓ | NIAH% ↑ | MultiKey% ↑ | ActiveSlots | Сжатие | Scan% ↓ | Tok/s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **1. Full KV (верхняя граница)** | **23.75** | **100%** | **100%** | 2048 | 1.0× | 0.0% | 366.7 |
+| **2. Flat Quest + Halo=8 (K=4)** | 25.97 | 100% | 25% | 232 | 8.8× | 100.0% | 216.8 |
+| **3. Chrono-Hybrid + Halo=8 + Pin=32 (K=4, flat)** | 25.38 | 100% | 25% | 264 | 7.8× | 48.3% | 126.4 |
+| **4. Chrono-Hybrid + Halo=8 + Pin=32 + Decoupled (K=4)** | **25.19** | 100% | 25% | 264 | 7.8× | **48.1%** | 130.1 |
+| **5. Chrono-Hybrid + Decoupled + Funnel x2 (K=4)** | 25.27 | 100% | 50% | 264 | 7.8× | 49.6% | 133.5 |
+| **6. Chrono-BVH + Decoupled + Funnel x2 (K=4)** | 25.24 | **100%** | **75%** | 264 | 7.8× | **50.3%** | 140.9 |
+| **7. Chrono-Hybrid + Decoupled + Funnel x2 (K=6)** | 25.09 | 100% | 50% | 288 | 7.1× | 49.5% | 136.8 |
+| **8. Chrono-Hybrid + Decoupled + Funnel x2 (K=6, beam=6)** | **25.05** | **100%** | **100%** | 292 | 7.0× | **59.9%** | 125.3 |
+
+### Результаты v3.5 на `seq-len 4096` (с эталоном `Full KV`)
+
+| Конфигурация | PPL ↓ | NIAH% ↑ | MultiKey% ↑ | ActiveSlots | Сжатие | Scan% ↓ | Tok/s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **1. Full KV (верхняя граница)** | **21.64** | **100%** | **100%** | 4096 | 1.0× | 0.0% | 386.0 |
+| **2. Flat Quest + Halo=8 (K=4)** | 25.42 | **80%** | 25% | 236 | 17.4× | 100.0% | 227.3 |
+| **3. Chrono-Hybrid + Halo=8 + Pin=32 (K=4, flat)** | 24.40 | 20% | 25% | 268 | 15.3× | 29.3% | 126.8 |
+| **4. Chrono-Hybrid + Halo=8 + Pin=32 + Decoupled (K=4)** | 24.47 | 20% | 25% | 268 | 15.3× | **29.2%** | 131.0 |
+| **5. Chrono-Hybrid + Decoupled + Funnel x2 (K=4)** | 24.41 | 40% | 25% | 268 | 15.3× | 35.9% | 132.3 |
+| **6. Chrono-BVH + Decoupled + Funnel x2 (K=4)** | 24.75 | 20% | 25% | 268 | 15.3× | 36.5% | 135.3 |
+| **7. Chrono-Hybrid + Decoupled + Funnel x2 (K=6)** | 24.02 | 40% | **50%** | 312 | 13.1× | **35.8%** | 128.2 |
+| **8. Chrono-Hybrid + Decoupled + Funnel x2 (K=6, beam=6)** | **23.98** | 40% | **50%** | 312 | 13.1× | **44.2%** | 120.9 |
+
+### Главные выводы Главы 5
+1. **Историческая победа на `2048`:**
+   * `Chrono-BVH + Decoupled + Funnel x2 (K=4)` побил `Flat Quest + Halo` сразу по всем метрикам (`25.24 vs 25.97` PPL, `100% == 100%` NIAH, **`75% vs 25%` MultiKey**, **`50.3% vs 100%` Scan**).
+   * `Chrono-Hybrid + Decoupled + Funnel x2 (K=6, beam=6)` впервые вышел на **`100% NIAH` + `100% MultiKey`** (на уровне `Full KV`!) при `PPL = 25.05`, сжатии `7.0×` и `Scan = 59.9%`.
+2. **Сильный `PPL` и `MultiKey` на `4096`, но обнаружен потолок `Chrono-Hybrid` на `NIAH` (`40%`):**
+   * На `4096` получены рекордные `PPL = 23.98` (`-1.44` к `Flat Quest + Halo`) и `MultiKey = 50%` (в 2× выше `Flat Quest + Halo = 25%`) при `Scan = 35.8–44.2%`.
+   * Однако `Chrono-Hybrid` застрял на `40%` NIAH даже при `K=6, beam=6`, тогда как `Chrono-BVH` в v3 уже давал `80%` NIAH. Причина: в `Chrono-Hybrid` скоринг `Moment-UCB` включается уже на Уровне 1 (`64` токена), где одиночная иголка меняет среднее и дисперсию всего на `1/64 ≈ 1.5%`, тогда как `AABB` на Уровне 1 сохраняет 100% пика одиночной иголки.
 
 ---
 
@@ -159,28 +193,11 @@ pip install -r requirements.txt
 
 ## Запуск экспериментов Главы 5 (v3.5)
 
-### Шаг 1. Юнит-тесты Decoupled Envelopes, Funnel Beam, Halo и дедупликации (CPU, 2 секунды)
 ```powershell
 python tests/sanity_check_paged.py
-```
-
-### Шаг 2. Решающий прогон v3.5 на `seq-len 4096` (включая эталон `Full KV`!)
-Изолированно проверяет вклад `T=1 Answer Routing`, `Decoupled Envelopes`, `Funnel Beam x2`, `Chrono-Hybrid vs Chrono-BVH` и `K=6`:
-```powershell
 python benchmarks/run_paged_eval.py --model Qwen/Qwen2.5-0.5B-Instruct --text-file eval.txt --suite v35 --seq-len 4096 --chunk-size 32 --local-size 128 --page-size 16 --top-k-pages 4 --beam-width 4 --funnel-mult 2 --halo-tokens 8 --pinned-size 32 --out-json results/paged_v35_4k.json
-```
-
-### Шаг 3. (Опционально) Тот же прогон v3.5 на `seq-len 2048` для полной симметрии таблиц
-```powershell
 python benchmarks/run_paged_eval.py --model Qwen/Qwen2.5-0.5B-Instruct --text-file eval.txt --suite v35 --seq-len 2048 --chunk-size 32 --local-size 128 --page-size 16 --top-k-pages 4 --beam-width 4 --funnel-mult 2 --halo-tokens 8 --pinned-size 32 --out-json results/paged_v35_2k.json
 ```
-
----
-
-## Целевые критерии успеха Главы 5 (v3.5 на `4096`)
-1. **`T=1 Answer Routing` + `Decoupled` + `Funnel Beam x2` (Строка 5 vs Строка 3):** вернуть `NIAH` на `K=4, beam=4` с `20%` обратно к **`80–100%`** при `Scan% ≈ 34–38%` (почти в 3× меньше `Flat Quest = 100%`).
-2. **Рост `MultiKey`:** поднять `MultiKey%` за счёт честного `T=1` роутинга первой цифры ответа (особенно на `K=6` — Строки 7–8).
-3. **Эталон `Full KV` на `4096`:** впервые зафиксировать честную верхнюю границу `0.5B` на длине `4096`, чтобы точно видеть процент восстановления качества.
 
 ---
 

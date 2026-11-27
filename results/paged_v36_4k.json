@@ -1,0 +1,258 @@
+{
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "seq_len": 4096,
+  "rows": [
+    {
+      "name": "1. Flat Quest + Halo=8 (K=4)",
+      "config": {
+        "router": "flat_quest",
+        "sink_size": 4,
+        "local_size": 128,
+        "page_size": 16,
+        "top_k_pages": 4,
+        "halo_tokens": 8,
+        "pinned_size": 0,
+        "decouple_pinned": false,
+        "beam_width": 4,
+        "funnel_mult": 1,
+        "branching": 4,
+        "rtree_max_fanout": 8,
+        "ucb_beta": 1.0,
+        "offload_to_cpu": true
+      },
+      "ppl": 25.420630816064282,
+      "nll": 3.2355610811915727,
+      "active_slots": 236,
+      "compression_x": 17.35593220338983,
+      "scan_pct": 100.0,
+      "tok_per_sec": 214.26398000280764,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 80.0,
+      "niah_per_depth": {
+        "10%": true,
+        "30%": true,
+        "50%": true,
+        "70%": true,
+        "90%": false
+      },
+      "niah_scan_pct": 100.0,
+      "multikey_acc": 25.0,
+      "multikey_details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": false,
+        "DELTA-PRISM": true
+      }
+    },
+    {
+      "name": "2. Flat Quest + Halo=8 (K=6)",
+      "config": {
+        "router": "flat_quest",
+        "sink_size": 4,
+        "local_size": 128,
+        "page_size": 16,
+        "top_k_pages": 6,
+        "halo_tokens": 8,
+        "pinned_size": 0,
+        "decouple_pinned": false,
+        "beam_width": 4,
+        "funnel_mult": 1,
+        "branching": 4,
+        "rtree_max_fanout": 8,
+        "ucb_beta": 1.0,
+        "offload_to_cpu": true
+      },
+      "ppl": 24.668351241219025,
+      "nll": 3.2055210957670943,
+      "active_slots": 280,
+      "compression_x": 14.628571428571428,
+      "scan_pct": 100.0,
+      "tok_per_sec": 216.2347406757078,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 80.0,
+      "niah_per_depth": {
+        "10%": true,
+        "30%": true,
+        "50%": true,
+        "70%": true,
+        "90%": false
+      },
+      "niah_scan_pct": 100.0,
+      "multikey_acc": 25.0,
+      "multikey_details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": false,
+        "DELTA-PRISM": true
+      }
+    },
+    {
+      "name": "3. Chrono-Hybrid-L2 + Decoupled + Funnel x2 (K=4, beam=4)",
+      "config": {
+        "router": "chrono_hybrid_l2",
+        "sink_size": 4,
+        "local_size": 128,
+        "page_size": 16,
+        "top_k_pages": 4,
+        "halo_tokens": 8,
+        "pinned_size": 32,
+        "decouple_pinned": true,
+        "beam_width": 4,
+        "funnel_mult": 2,
+        "branching": 4,
+        "rtree_max_fanout": 8,
+        "ucb_beta": 1.0,
+        "offload_to_cpu": true
+      },
+      "ppl": 24.74193139656986,
+      "nll": 3.2084994316847895,
+      "active_slots": 268,
+      "compression_x": 15.283582089552239,
+      "scan_pct": 36.21824531253443,
+      "tok_per_sec": 129.39741402869097,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 40.0,
+      "niah_per_depth": {
+        "10%": false,
+        "30%": true,
+        "50%": false,
+        "70%": false,
+        "90%": true
+      },
+      "niah_scan_pct": 33.14398648433267,
+      "multikey_acc": 50.0,
+      "multikey_details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": true,
+        "GAMMA-PULSE": false,
+        "DELTA-PRISM": true
+      }
+    },
+    {
+      "name": "4. Chrono-Hybrid-L2 + Decoupled + Funnel x2 (K=6, beam=4)",
+      "config": {
+        "router": "chrono_hybrid_l2",
+        "sink_size": 4,
+        "local_size": 128,
+        "page_size": 16,
+        "top_k_pages": 6,
+        "halo_tokens": 8,
+        "pinned_size": 32,
+        "decouple_pinned": true,
+        "beam_width": 4,
+        "funnel_mult": 2,
+        "branching": 4,
+        "rtree_max_fanout": 8,
+        "ucb_beta": 1.0,
+        "offload_to_cpu": true
+      },
+      "ppl": 24.24203584249687,
+      "nll": 3.1880881445760973,
+      "active_slots": 312,
+      "compression_x": 13.128205128205128,
+      "scan_pct": 36.21673056161456,
+      "tok_per_sec": 128.0164061025391,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 40.0,
+      "niah_per_depth": {
+        "10%": false,
+        "30%": true,
+        "50%": false,
+        "70%": false,
+        "90%": true
+      },
+      "niah_scan_pct": 33.14307003283288,
+      "multikey_acc": 25.0,
+      "multikey_details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": false,
+        "DELTA-PRISM": true
+      }
+    },
+    {
+      "name": "5. Chrono-BVH + Decoupled + Funnel x2 (K=6, beam=6)",
+      "config": {
+        "router": "chrono_bvh",
+        "sink_size": 4,
+        "local_size": 128,
+        "page_size": 16,
+        "top_k_pages": 6,
+        "halo_tokens": 8,
+        "pinned_size": 32,
+        "decouple_pinned": true,
+        "beam_width": 6,
+        "funnel_mult": 2,
+        "branching": 4,
+        "rtree_max_fanout": 8,
+        "ucb_beta": 1.0,
+        "offload_to_cpu": true
+      },
+      "ppl": 24.22177110678221,
+      "nll": 3.187251861247513,
+      "active_slots": 312,
+      "compression_x": 13.128205128205128,
+      "scan_pct": 44.78774208473792,
+      "tok_per_sec": 129.8081969483941,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 80.0,
+      "niah_per_depth": {
+        "10%": true,
+        "30%": true,
+        "50%": false,
+        "70%": true,
+        "90%": true
+      },
+      "niah_scan_pct": 42.00830384750247,
+      "multikey_acc": 25.0,
+      "multikey_details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": false,
+        "DELTA-PRISM": true
+      }
+    },
+    {
+      "name": "6. Chrono-Hybrid-L2 + Decoupled + Funnel x2 (K=6, beam=6)",
+      "config": {
+        "router": "chrono_hybrid_l2",
+        "sink_size": 4,
+        "local_size": 128,
+        "page_size": 16,
+        "top_k_pages": 6,
+        "halo_tokens": 8,
+        "pinned_size": 32,
+        "decouple_pinned": true,
+        "beam_width": 6,
+        "funnel_mult": 2,
+        "branching": 4,
+        "rtree_max_fanout": 8,
+        "ucb_beta": 1.0,
+        "offload_to_cpu": true
+      },
+      "ppl": 24.21321900375731,
+      "nll": 3.1868987238526563,
+      "active_slots": 312,
+      "compression_x": 13.128205128205128,
+      "scan_pct": 44.612444091920594,
+      "tok_per_sec": 126.27410837392983,
+      "peak_vram_mb": 0.0,
+      "niah_acc": 80.0,
+      "niah_per_depth": {
+        "10%": true,
+        "30%": true,
+        "50%": false,
+        "70%": true,
+        "90%": true
+      },
+      "niah_scan_pct": 41.85734834719965,
+      "multikey_acc": 25.0,
+      "multikey_details": {
+        "ALPHA-ORBIT": false,
+        "BETA-QUARTZ": false,
+        "GAMMA-PULSE": false,
+        "DELTA-PRISM": true
+      }
+    }
+  ]
+}
